@@ -218,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getRoleTitle(role) {
     if (role === 'super_admin') return 'Super Admin';
+    if (role === 'domain_manager') return 'Domain Manager';
     if (role === 'webmaster') return 'Webmaster';
     if (role === 'security') return 'Security Analyst';
     if (role === 'billing') return 'Billing Officer';
@@ -240,6 +241,8 @@ document.addEventListener('DOMContentLoaded', () => {
     roleBanner.style.display = 'block';
     if (role === 'super_admin') {
       roleBanner.style.display = 'none';
+    } else if (role === 'domain_manager') {
+      roleBannerText.textContent = 'Active Role: Domain Manager. You have access to your assigned proxy domains with Nginx configuration editing permissions.';
     } else if (role === 'webmaster') {
       roleBannerText.textContent = 'Active Role: Webmaster. You can add new domain names, but editing, deleting, and suspending existing domains are disabled.';
     } else if (role === 'security') {
@@ -627,7 +630,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadHosts() {
     try {
-      const res = await fetch('/api/hosts');
+      const res = await fetch('/api/hosts', {
+        headers: sessionToken ? { 'Authorization': `Bearer ${sessionToken}` } : {}
+      });
       hostsData = await res.json();
       renderHostsTable();
       loadSystemStatus();
@@ -686,6 +691,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sslBadgeText = h.ssl_status === 'expiring_soon' ? 'Expiring Soon' : "Let's Encrypt";
       }
 
+      const isDomainMgr = (activeRole === 'domain_manager' || h.can_edit_nginx_only);
       const canEdit = activeRole === 'super_admin';
       const canSuspend = activeRole === 'super_admin';
       const canDelete = activeRole === 'super_admin';
@@ -735,28 +741,38 @@ document.addEventListener('DOMContentLoaded', () => {
           </td>
           <td>
             <div class="actions-cell">
-              ${canExport ? `
-                <a href="/api/hosts/${h.id}/export-conf?role=${encodeURIComponent(activeRole)}" class="btn-icon" title="Export .conf (Migration)" download>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                </a>
-              ` : ''}
-              <button class="btn-icon" title="View Generated Nginx Config" onclick="openNginxConfigModal(${h.id})">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-              </button>
-              ${canEdit ? `
-                <button class="btn-icon" title="Edit Host" onclick="openEditHostModal(${h.id})">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              ${isDomainMgr ? `
+                <button class="btn-secondary btn-sm" title="Edit Custom Nginx Configuration" onclick="openEditHostModal(${h.id})" style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem; font-size: 0.74rem;">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  <span>Edit Nginx</span>
+                </button>
+                <button class="btn-icon" title="View Generated Nginx Config" onclick="openNginxConfigModal(${h.id})">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                 </button>
               ` : `
-                <button class="btn-icon disabled" title="Webmasters cannot edit existing hosts" disabled>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                ${canExport ? `
+                  <a href="/api/hosts/${h.id}/export-conf?role=${encodeURIComponent(activeRole)}" class="btn-icon" title="Export .conf (Migration)" download>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                  </a>
+                ` : ''}
+                <button class="btn-icon" title="View Generated Nginx Config" onclick="openNginxConfigModal(${h.id})">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                 </button>
+                ${canEdit ? `
+                  <button class="btn-icon" title="Edit Host" onclick="openEditHostModal(${h.id})">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                  </button>
+                ` : `
+                  <button class="btn-icon disabled" title="Webmasters cannot edit existing hosts" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                  </button>
+                `}
+                ${canDelete ? `
+                  <button class="btn-icon danger" title="Delete Host" onclick="deleteHost(${h.id}, '${escapeHtml(primaryDomain)}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                  </button>
+                ` : ''}
               `}
-              ${canDelete ? `
-                <button class="btn-icon danger" title="Delete Host" onclick="deleteHost(${h.id}, '${escapeHtml(primaryDomain)}')">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-                </button>
-              ` : ''}
             </div>
           </td>
         </tr>
@@ -864,15 +880,28 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.openEditHostModal = function(id) {
-    if (activeRole !== 'super_admin') {
-      showToast('Permission denied: Only Super Admin can edit hosts', 'error');
+    if (activeRole !== 'super_admin' && activeRole !== 'domain_manager') {
+      showToast('Permission denied: Only Super Admin and Domain Managers can edit hosts', 'error');
       return;
     }
     const h = hostsData.find(item => item.id === id);
     if (!h) return;
 
-    hostModalTitle.textContent = `Edit Proxy Host #${h.id}`;
+    const isDomainMgr = (activeRole === 'domain_manager' || h.can_edit_nginx_only);
+    hostModalTitle.textContent = isDomainMgr ? `Edit Custom Nginx Configuration (${h.domain_names})` : `Edit Proxy Host #${h.id}`;
     document.getElementById('edit-host-id').value = h.id;
+    
+    // Enable or disable fields based on role
+    const fieldsToToggle = [
+      'input-domain-names', 'input-app-name', 'input-forward-scheme',
+      'input-forward-host', 'input-forward-port', 'input-websocket',
+      'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason'
+    ];
+    fieldsToToggle.forEach(fId => {
+      const el = document.getElementById(fId);
+      if (el) el.disabled = isDomainMgr;
+    });
+
     document.getElementById('input-domain-names').value = h.domain_names;
     document.getElementById('input-app-name').value = h.app_name || '';
     document.getElementById('input-forward-scheme').value = h.forward_scheme;
@@ -882,7 +911,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('input-block-exploits').checked = h.block_exploits;
     document.getElementById('input-ssl-forced').checked = h.ssl_forced;
     document.getElementById('input-suspended-reason').value = h.suspended_reason || 'Administrative Policy Suspension';
-    document.getElementById('input-custom-nginx').value = h.custom_nginx_config || '';
+    
+    const customNginxEl = document.getElementById('input-custom-nginx');
+    customNginxEl.value = h.custom_nginx_config || '';
+    customNginxEl.disabled = false;
+
+    if (isDomainMgr) {
+      setTimeout(() => {
+        customNginxEl.focus();
+      }, 100);
+    }
 
     hostModal.classList.add('open');
   };
@@ -891,8 +929,8 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const editId = document.getElementById('edit-host-id').value;
 
-    if (editId && activeRole !== 'super_admin') {
-      showToast('Permission denied: Webmasters cannot edit existing hosts', 'error');
+    if (editId && activeRole !== 'super_admin' && activeRole !== 'domain_manager') {
+      showToast('Permission denied: Only Super Admin and Domain Managers can edit configurations', 'error');
       return;
     }
 
@@ -914,13 +952,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (editId) {
         res = await fetch(`/api/hosts/${editId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
           body: JSON.stringify(payload)
         });
       } else {
         res = await fetch('/api/hosts', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
           body: JSON.stringify(payload)
         });
       }
@@ -1311,6 +1355,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tbody.innerHTML = pageItems.map(u => {
       let roleBadgeStyle = 'background: rgba(2, 132, 199, 0.12); color: var(--secondary);';
       if (u.role === 'super_admin') roleBadgeStyle = 'background: rgba(16, 185, 129, 0.12); color: var(--accent-emerald);';
+      if (u.role === 'domain_manager') roleBadgeStyle = 'background: rgba(14, 165, 233, 0.15); color: #0284c7; border: 1px solid rgba(14, 165, 233, 0.3);';
       if (u.role === 'security') roleBadgeStyle = 'background: rgba(245, 158, 11, 0.12); color: #f59e0b;';
       if (u.role === 'billing') roleBadgeStyle = 'background: rgba(168, 85, 247, 0.12); color: #a855f7;';
 
@@ -1330,6 +1375,11 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="badge-tag" style="${roleBadgeStyle} font-size: 0.74rem; padding: 0.2rem 0.55rem; border-radius: 6px; font-weight: 700; text-transform: uppercase;">
               ${escapeHtml(u.role.replace('_', ' '))}
             </span>
+            ${(u.role === 'domain_manager' && u.allowed_domains) ? `
+              <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; max-width: 200px; word-break: break-all;">
+                <strong>Assigned:</strong> ${escapeHtml(u.allowed_domains)}
+              </div>
+            ` : ''}
           </td>
           <td>
             <span class="user-status-badge ${u.is_active ? 'active' : 'suspended'}">
@@ -1374,6 +1424,52 @@ document.addEventListener('DOMContentLoaded', () => {
   const userStatusGroup = document.getElementById('user-status-group');
   const userPassHint = document.getElementById('user-pass-hint');
   const btnSaveUser = document.getElementById('btn-save-user');
+  const userRoleSelect = document.getElementById('user-role');
+  const domainMgrGroup = document.getElementById('domain-manager-domains-group');
+  const domainMgrCheckboxes = document.getElementById('domain-manager-checkboxes');
+
+  function updateDomainManagerField(assignedDomainsStr = '') {
+    if (!userRoleSelect || !domainMgrGroup || !domainMgrCheckboxes) return;
+    if (userRoleSelect.value === 'domain_manager') {
+      domainMgrGroup.style.display = 'block';
+      const allDomains = [];
+      hostsData.forEach(h => {
+        (h.domain_names || '').split(',').forEach(d => {
+          const clean = d.trim();
+          if (clean && !allDomains.includes(clean)) allDomains.push(clean);
+        });
+      });
+      const assignedArr = (assignedDomainsStr || '').split(',').map(s => s.trim().toLowerCase());
+      if (allDomains.length === 0) {
+        domainMgrCheckboxes.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted);">No proxy hosts found. Add proxy hosts first.</span>';
+      } else {
+        domainMgrCheckboxes.innerHTML = allDomains.map(d => {
+          const isChecked = assignedArr.includes(d.toLowerCase());
+          return `
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--text-main); cursor: pointer; padding: 0.15rem 0;">
+              <input type="checkbox" class="domain-mgr-chk" value="${escapeHtml(d)}" ${isChecked ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: var(--secondary);">
+              <span>${escapeHtml(d)}</span>
+            </label>
+          `;
+        }).join('');
+      }
+    } else {
+      domainMgrGroup.style.display = 'none';
+    }
+  }
+
+  if (userRoleSelect) {
+    userRoleSelect.addEventListener('change', () => {
+      updateDomainManagerField('');
+    });
+  }
+
+  function getSelectedDomainManagerDomains() {
+    if (!userRoleSelect || userRoleSelect.value !== 'domain_manager') return null;
+    const chks = document.querySelectorAll('.domain-mgr-chk:checked');
+    const selected = Array.from(chks).map(c => c.value.trim()).filter(Boolean);
+    return selected.join(', ');
+  }
 
   document.getElementById('btn-open-user-modal').addEventListener('click', () => {
     if (activeRole !== 'super_admin') {
@@ -1388,7 +1484,8 @@ document.addEventListener('DOMContentLoaded', () => {
     userUsernameInput.style.opacity = '1';
     userStatusGroup.style.display = 'none';
     userPassHint.textContent = '(Set initial password)';
-    document.getElementById('user-role').value = 'webmaster';
+    if (userRoleSelect) userRoleSelect.value = 'domain_manager';
+    updateDomainManagerField('');
     userModal.classList.add('open');
   });
 
@@ -1410,9 +1507,11 @@ document.addEventListener('DOMContentLoaded', () => {
       userUsernameInput.disabled = true;
       userUsernameInput.style.opacity = '0.7';
       document.getElementById('user-email').value = u.email;
-      document.getElementById('user-role').value = u.role;
+      if (userRoleSelect) userRoleSelect.value = u.role;
       document.getElementById('user-password').value = '';
       document.getElementById('user-is-active').checked = !!u.is_active;
+
+      updateDomainManagerField(u.allowed_domains || '');
 
       userStatusGroup.style.display = u.id === 1 ? 'none' : 'block';
       userPassHint.textContent = '(Leave blank to keep existing password)';
@@ -1435,13 +1534,21 @@ document.addEventListener('DOMContentLoaded', () => {
   userForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const editId = editUserIdInput.value;
+    const roleVal = document.getElementById('user-role').value;
+    const allowedDomainsVal = getSelectedDomainManagerDomains();
+
+    if (roleVal === 'domain_manager' && !allowedDomainsVal) {
+      showToast('Please select at least one assigned proxy domain for this Domain Manager', 'warning');
+      return;
+    }
 
     if (editId) {
       // Edit User
       const payload = {
         full_name: document.getElementById('user-fullname').value.trim(),
         email: document.getElementById('user-email').value.trim(),
-        role: document.getElementById('user-role').value,
+        role: roleVal,
+        allowed_domains: allowedDomainsVal,
         password: document.getElementById('user-password').value || null,
         is_active: document.getElementById('user-is-active').checked
       };
@@ -1470,7 +1577,8 @@ document.addEventListener('DOMContentLoaded', () => {
         full_name: document.getElementById('user-fullname').value.trim(),
         username: document.getElementById('user-username').value.trim(),
         email: document.getElementById('user-email').value.trim(),
-        role: document.getElementById('user-role').value,
+        role: roleVal,
+        allowed_domains: allowedDomainsVal,
         password: document.getElementById('user-password').value
       };
 

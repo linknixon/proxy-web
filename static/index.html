@@ -11,6 +11,50 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/nova.css">
   <link rel="stylesheet" href="/static/css/proxy-admin.css">
+  <script>
+    window.handleLogout = function(event, isSessionExpired = false) {
+      if (event) {
+        try { event.preventDefault(); event.stopPropagation(); } catch(e) {}
+      }
+      const token = localStorage.getItem('nova_session_token') || localStorage.getItem('nova_token');
+      try {
+        if (token) {
+          fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token }
+          }).catch(function() {});
+        }
+      } catch(e) {}
+      try { localStorage.clear(); } catch(e) {}
+      try { sessionStorage.clear(); } catch(e) {}
+      window.location.href = isSessionExpired ? '/login?session_expired=1' : '/login?logged_out=1';
+    };
+
+    window.toggleUserProfileDropdown = function(event) {
+      if (event) {
+        try { event.preventDefault(); event.stopPropagation(); } catch(e) {}
+      }
+      const dd = document.getElementById('user-profile-dropdown');
+      if (!dd) return;
+      const isVisible = dd.style.display === 'block' || dd.classList.contains('show');
+      if (isVisible) {
+        dd.style.display = 'none';
+        dd.classList.remove('show');
+      } else {
+        dd.style.display = 'block';
+        dd.classList.add('show');
+      }
+    };
+
+    document.addEventListener('click', function(e) {
+      const dd = document.getElementById('user-profile-dropdown');
+      const btn = document.getElementById('btn-user-profile');
+      if (dd && btn && !dd.contains(e.target) && !btn.contains(e.target)) {
+        dd.style.display = 'none';
+        dd.classList.remove('show');
+      }
+    });
+  </script>
 </head>
 <body>
   <div class="admin-layout">
@@ -22,14 +66,9 @@
         </a>
 
         <div class="admin-nav-tools">
-          <div class="status-indicator-pill">
-            <span class="pulse-dot"></span>
-            <span>UFW &amp; Nginx Active</span>
-          </div>
-
           <!-- Circular User Profile in Header Corner -->
           <div class="user-profile-widget" style="position: relative;">
-            <button class="circular-profile-btn" id="btn-user-profile" type="button" title="View Profile & Change Password">
+            <button class="circular-profile-btn" id="btn-user-profile" type="button" title="View Profile & Change Password" onclick="window.toggleUserProfileDropdown(event)">
               <span class="avatar-initials" id="nav-avatar-initials">SA</span>
               <span class="avatar-status-dot"></span>
             </button>
@@ -61,7 +100,7 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                   <span>Change Password</span>
                 </button>
-                <button type="button" class="profile-action-btn btn-danger-action" id="btn-dropdown-logout" style="border-top: 1px solid rgba(255, 255, 255, 0.08); margin-top: 0.35rem; padding-top: 0.75rem; background: rgba(239, 68, 68, 0.1);">
+                <button type="button" class="profile-action-btn btn-danger-action" id="btn-dropdown-logout" onclick="window.handleLogout(event, false)" style="border-top: 1px solid rgba(255, 255, 255, 0.08); margin-top: 0.35rem; padding-top: 0.75rem; background: rgba(239, 68, 68, 0.1);">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
                   <span style="font-weight: 800; color: #f87171; font-size: 0.86rem;">Logout</span>
                 </button>
@@ -70,7 +109,7 @@
           </div>
 
           <!-- Quick Direct Logout Button in Header Bar -->
-          <button class="btn-navbar-logout" id="btn-navbar-logout" type="button" title="Sign out / Logout">
+          <button class="btn-navbar-logout" id="btn-navbar-logout" type="button" title="Sign out / Logout" onclick="window.handleLogout(event, false)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
             <span>Logout</span>
           </button>
@@ -78,7 +117,7 @@
           <!-- Hidden compatibility elements for existing script hooks -->
           <span id="nav-username-display" style="display: none;">Admin</span>
           <span id="nav-userrole-display" style="display: none;">super admin</span>
-          <button id="btn-logout" style="display: none;"></button>
+          <button id="btn-logout" type="button" onclick="window.handleLogout(event, false)" style="display: none;"></button>
 
           <button class="theme-toggle-btn" id="theme-toggle" title="Toggle Light / Dark Mode">
             <span id="theme-icon" style="display: inline-flex; align-items: center;">
@@ -1245,11 +1284,22 @@
             <div>
               <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Assigned Role *</label>
               <select id="user-role" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                <option value="domain_manager">Domain Manager (Assigned Domains Only)</option>
                 <option value="webmaster">Webmaster (Add Domains)</option>
                 <option value="security">Security (WHOIS, Abuse & SSL)</option>
                 <option value="billing">Billing (Domain Expiry)</option>
                 <option value="super_admin">Super Admin (Full Access)</option>
               </select>
+            </div>
+          </div>
+
+          <div id="domain-manager-domains-group" style="display: none; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">
+              Assigned Proxy Domains *
+              <span style="font-weight: 400; font-size: 0.74rem; color: var(--text-muted);">(Select one or more domains to grant Nginx edit rights)</span>
+            </label>
+            <div id="domain-manager-checkboxes" style="max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem; padding: 0.25rem 0;">
+              <!-- Populated dynamically from proxy hosts -->
             </div>
           </div>
 

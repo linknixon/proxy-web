@@ -1,3 +1,5 @@
 venv/
 __pycache__/
 *.pyc
+*.sqlite
+active_sessions.json

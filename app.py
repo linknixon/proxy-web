@@ -107,7 +107,8 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False)
     full_name = Column(String(150), nullable=False)
     email = Column(String(150), unique=True, nullable=False)
-    role = Column(String(50), default="super_admin", nullable=False)  # super_admin, webmaster, security, billing
+    role = Column(String(50), default="super_admin", nullable=False)  # super_admin, domain_manager, webmaster, security, billing
+    allowed_domains = Column(Text, nullable=True)  # Comma-separated domains for domain_manager role
     is_active = Column(Boolean, default=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -235,12 +236,14 @@ class UserCreate(BaseModel):
     full_name: str = Field(..., example="Operations Officer")
     email: str = Field(..., example="ops@novacloudedges.com")
     role: str = Field("webmaster", example="webmaster")
+    allowed_domains: Optional[str] = None
     password: Optional[str] = "TemporaryPass123!"
 
 class UserUpdate(BaseModel):
     full_name: str
     email: str
     role: str
+    allowed_domains: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -497,9 +500,46 @@ def verify_password(plain: str, stored_hash: str) -> bool:
             return hashlib.sha256(f"{salt}:{plain}".encode("utf-8")).hexdigest() == h
     return False
 
-# In-memory token sessions (10-minute inactivity expiration)
-ACTIVE_SESSIONS = {}
+# Token sessions with disk persistence (10-minute inactivity expiration)
+SESSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_sessions.json")
 SESSION_EXPIRY_SECONDS = 600
+
+def _load_persisted_sessions() -> dict:
+    if not os.path.exists(SESSIONS_FILE):
+        return {}
+    try:
+        with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        now = datetime.datetime.utcnow()
+        valid = {}
+        for token, sess in raw.items():
+            try:
+                last_active = datetime.datetime.fromisoformat(sess["last_active"])
+                if (now - last_active).total_seconds() <= SESSION_EXPIRY_SECONDS:
+                    sess["last_active"] = last_active
+                    valid[token] = sess
+            except Exception:
+                pass
+        return valid
+    except Exception as e:
+        logger.warning(f"Could not load persisted sessions: {e}")
+        return {}
+
+def _save_persisted_sessions():
+    try:
+        now = datetime.datetime.utcnow()
+        serializable = {}
+        for token, sess in list(ACTIVE_SESSIONS.items()):
+            if (now - sess["last_active"]).total_seconds() <= SESSION_EXPIRY_SECONDS:
+                item = dict(sess)
+                item["last_active"] = sess["last_active"].isoformat()
+                serializable[token] = item
+        with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(serializable, f)
+    except Exception as e:
+        logger.warning(f"Could not persist active sessions: {e}")
+
+ACTIVE_SESSIONS = _load_persisted_sessions()
 
 def create_session(user: User) -> str:
     token = secrets.token_urlsafe(32)
@@ -509,8 +549,10 @@ def create_session(user: User) -> str:
         "role": user.role,
         "full_name": user.full_name,
         "email": user.email,
+        "allowed_domains": getattr(user, "allowed_domains", "") or "",
         "last_active": datetime.datetime.utcnow()
     }
+    _save_persisted_sessions()
     return token
 
 def get_session_user(req: Request) -> Optional[dict]:
@@ -530,6 +572,7 @@ def get_session_user(req: Request) -> Optional[dict]:
     now = datetime.datetime.utcnow()
     if (now - sess["last_active"]).total_seconds() > SESSION_EXPIRY_SECONDS:
         del ACTIVE_SESSIONS[token]
+        _save_persisted_sessions()
         return None
 
     sess["last_active"] = now
@@ -866,6 +909,7 @@ def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
         sess["email"] = user.email
         sess["full_name"] = user.full_name
         sess["role"] = user.role
+        sess["allowed_domains"] = user.allowed_domains or ""
         sess["is_active"] = user.is_active
 
     return {"user": sess, "active": True}
@@ -874,9 +918,17 @@ def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
 def logout(req: Request):
     """Terminates active session token."""
     auth_header = req.headers.get("Authorization") or ""
-    token = auth_header.replace("Bearer ", "").strip()
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "").strip()
+    elif "X-Auth-Token" in req.headers:
+        token = req.headers["X-Auth-Token"].strip()
+    elif "token" in req.query_params:
+        token = req.query_params["token"].strip()
+
     if token and token in ACTIVE_SESSIONS:
         del ACTIVE_SESSIONS[token]
+        _save_persisted_sessions()
     return {"message": "Signed out successfully."}
 
 @app.post("/api/auth/change-password")
@@ -976,6 +1028,9 @@ DEFAULT_ROLE_PERMS = {
         "export_import", "ufw", "security", "billing", "suspension",
         "editor", "logs", "users", "roles"
     ],
+    "domain_manager": [
+        "hosts", "edit_nginx_only"
+    ],
     "webmaster": [
         "hosts", "create_host", "editor"
     ],
@@ -1041,6 +1096,7 @@ def list_users(req: Request, db: Session = Depends(get_db)):
             "full_name": u.full_name,
             "email": u.email,
             "role": u.role,
+            "allowed_domains": u.allowed_domains or "",
             "is_active": bool(u.is_active),
             "created_at": u.created_at.strftime("%Y-%m-%d") if u.created_at else ""
         }
@@ -1060,7 +1116,7 @@ def create_user(data: UserCreate, req: Request, db: Session = Depends(get_db)):
     if not clean_username or not clean_email or not data.full_name.strip():
         raise HTTPException(status_code=400, detail="Username, full name, and email are required.")
 
-    valid_roles = ["super_admin", "webmaster", "security", "billing"]
+    valid_roles = ["super_admin", "domain_manager", "webmaster", "security", "billing"]
     if data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
 
@@ -1077,6 +1133,7 @@ def create_user(data: UserCreate, req: Request, db: Session = Depends(get_db)):
         full_name=data.full_name.strip(),
         email=clean_email,
         role=data.role,
+        allowed_domains=data.allowed_domains.strip() if (data.allowed_domains and data.allowed_domains.strip()) else None,
         is_active=True,
         password_hash=hash_password(password_to_use)
     )
@@ -1108,6 +1165,7 @@ def get_user_detail(user_id: int, db: Session = Depends(get_db)):
         "full_name": user.full_name,
         "email": user.email,
         "role": user.role,
+        "allowed_domains": user.allowed_domains or "",
         "is_active": user.is_active,
         "created_at": user.created_at.strftime("%Y-%m-%d") if user.created_at else ""
     }
@@ -1127,7 +1185,7 @@ def update_user(user_id: int, data: UserUpdate, req: Request, db: Session = Depe
     if not clean_email or not data.full_name.strip():
         raise HTTPException(status_code=400, detail="Full name and email are required.")
 
-    valid_roles = ["super_admin", "webmaster", "security", "billing"]
+    valid_roles = ["super_admin", "domain_manager", "webmaster", "security", "billing"]
     if data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
 
@@ -1139,6 +1197,7 @@ def update_user(user_id: int, data: UserUpdate, req: Request, db: Session = Depe
     user.full_name = data.full_name.strip()
     user.email = clean_email
     user.role = data.role
+    user.allowed_domains = data.allowed_domains.strip() if (data.allowed_domains and data.allowed_domains.strip()) else None
     if data.is_active is not None:
         user.is_active = data.is_active
     if data.password and data.password.strip():
@@ -1257,7 +1316,8 @@ def delete_user(user_id: int, req: Request, db: Session = Depends(get_db)):
 # Proxy Hosts CRUD
 # ---------------------------------------------------------
 @app.get("/api/hosts")
-def list_proxy_hosts(search: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+    sess = get_session_user(req)
     query = db.query(ProxyHost)
 
     if search:
@@ -1276,8 +1336,21 @@ def list_proxy_hosts(search: Optional[str] = None, status: Optional[str] = None,
 
     hosts = query.order_by(ProxyHost.id.desc()).all()
     
+    is_domain_mgr = bool(sess and sess.get("role") == "domain_manager")
+    allowed_list = []
+    if is_domain_mgr:
+        user_obj = db.query(User).filter(User.id == sess["user_id"]).first()
+        raw_allowed = (user_obj.allowed_domains if user_obj else None) or sess.get("allowed_domains") or ""
+        allowed_list = [d.strip().lower() for d in raw_allowed.split(",") if d.strip()]
+
     result = []
     for h in hosts:
+        host_domains = [d.strip().lower() for d in h.domain_names.split(",") if d.strip()]
+        if is_domain_mgr:
+            # Domain manager can only view assigned domains
+            if not any(hd in allowed_list for hd in host_domains):
+                continue
+
         result.append({
             "id": h.id,
             "domain_names": h.domain_names,
@@ -1294,12 +1367,17 @@ def list_proxy_hosts(search: Optional[str] = None, status: Optional[str] = None,
             "is_suspended": bool(h.is_suspended),
             "suspended_reason": h.suspended_reason or "Administrative Policy Suspension",
             "custom_nginx_config": h.custom_nginx_config,
-            "created_at": h.created_at.strftime("%Y-%m-%d %H:%M") if h.created_at else None
+            "created_at": h.created_at.strftime("%Y-%m-%d %H:%M") if h.created_at else None,
+            "can_edit_nginx_only": is_domain_mgr
         })
     return result
 
 @app.post("/api/hosts")
 def create_proxy_host(data: ProxyHostCreate, req: Request, db: Session = Depends(get_db)):
+    sess = get_session_user(req)
+    if sess and sess.get("role") == "domain_manager":
+        raise HTTPException(status_code=403, detail="Permission denied: Domain managers cannot add new proxy hosts. You can only manage assigned domains.")
+
     clean_domains = ", ".join([d.strip() for d in data.domain_names.split(",") if d.strip()])
     if not clean_domains:
         raise HTTPException(status_code=400, detail="Domain names cannot be blank")
@@ -1345,6 +1423,32 @@ def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Ses
     if not host:
         raise HTTPException(status_code=404, detail="Proxy host not found")
 
+    sess = get_session_user(req)
+    if sess and sess.get("role") == "domain_manager":
+        user_obj = db.query(User).filter(User.id == sess["user_id"]).first()
+        raw_allowed = (user_obj.allowed_domains if user_obj else None) or sess.get("allowed_domains") or ""
+        allowed_list = [d.strip().lower() for d in raw_allowed.split(",") if d.strip()]
+        host_domains = [d.strip().lower() for d in host.domain_names.split(",") if d.strip()]
+        if not any(hd in allowed_list for hd in host_domains):
+            raise HTTPException(status_code=403, detail="Permission denied: You do not have access to manage this domain.")
+
+        # Domain manager can ONLY edit custom Nginx configuration
+        if data.custom_nginx_config is not None:
+            host.custom_nginx_config = data.custom_nginx_config
+            db.commit()
+
+            client_ip = req.client.host if req.client else "127.0.0.1"
+            audit = AuditLog(
+                action="UPDATE_HOST_NGINX",
+                details=f"Domain Manager @{sess.get('username')} updated custom Nginx config for host #{host.id} ({host.domain_names})",
+                status="success",
+                client_ip=client_ip
+            )
+            db.add(audit)
+            db.commit()
+            return {"message": "Custom Nginx configuration updated successfully"}
+        return {"message": "No changes applied"}
+
     if data.domain_names is not None:
         host.domain_names = ", ".join([d.strip() for d in data.domain_names.split(",") if d.strip()])
     if data.app_name is not None:
@@ -1388,6 +1492,10 @@ def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Ses
 
 @app.post("/api/hosts/{host_id}/toggle-suspend")
 def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = None, db: Session = Depends(get_db)):
+    sess = get_session_user(req)
+    if sess and sess.get("role") == "domain_manager":
+        raise HTTPException(status_code=403, detail="Permission denied: Domain managers cannot suspend or activate websites.")
+
     host = db.query(ProxyHost).filter(ProxyHost.id == host_id).first()
     if not host:
         raise HTTPException(status_code=404, detail="Proxy host not found")
@@ -1424,6 +1532,10 @@ def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = N
 
 @app.delete("/api/hosts/{host_id}")
 def delete_proxy_host(host_id: int, req: Request, db: Session = Depends(get_db)):
+    sess = get_session_user(req)
+    if sess and sess.get("role") == "domain_manager":
+        raise HTTPException(status_code=403, detail="Permission denied: Domain managers cannot delete proxy hosts.")
+
     host = db.query(ProxyHost).filter(ProxyHost.id == host_id).first()
     if not host:
         raise HTTPException(status_code=404, detail="Proxy host not found")
