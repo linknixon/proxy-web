@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentFilter = 'all';
   let activeTab = 'tab-hosts';
   let activeRole = localStorage.getItem('nova_role') || 'super_admin';
+  let globalRolePermissions = {};
 
   // -----------------------------------------------------
   // User Authentication & 10-Minute Inactivity Auto-Logout
@@ -633,7 +634,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/hosts', {
         headers: sessionToken ? { 'Authorization': `Bearer ${sessionToken}` } : {}
       });
-      hostsData = await res.json();
+      if (!res.ok) {
+        showToast('Error loading proxy hosts', 'error');
+        return;
+      }
+      const data = await res.json();
+      hostsData = Array.isArray(data) ? data : [];
       renderHostsTable();
       loadSystemStatus();
     } catch (err) {
@@ -646,11 +652,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const paginationEl = document.getElementById('hosts-pagination');
     const query = (document.getElementById('host-search-input').value || '').toLowerCase().trim();
 
-    const filtered = hostsData.filter(h => {
+    const hostList = Array.isArray(hostsData) ? hostsData : [];
+    const filtered = hostList.filter(h => {
       const matchesSearch = !query || 
-        h.domain_names.toLowerCase().includes(query) ||
-        h.forward_host.toLowerCase().includes(query) ||
-        String(h.forward_port).includes(query);
+        (h.domain_names && h.domain_names.toLowerCase().includes(query)) ||
+        (h.forward_host && h.forward_host.toLowerCase().includes(query)) ||
+        String(h.forward_port || '').includes(query);
 
       let matchesFilter = true;
       if (currentFilter === 'active') matchesFilter = !h.is_suspended;
@@ -2646,8 +2653,6 @@ document.addEventListener('DOMContentLoaded', () => {
     { id: 'editor', name: 'Nginx Syntax Tester', desc: 'Live configuration syntax validator with line numbers' },
     { id: 'logs', name: 'Audit Logs & Threats', desc: 'Administrative action logs and threat detection' }
   ];
-
-  let globalRolePermissions = {};
 
   async function loadRolePermissionsMatrix() {
     try {
