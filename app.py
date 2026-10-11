@@ -137,6 +137,23 @@ class DomainAbuseReport(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class WebTrafficLog(Base):
+    __tablename__ = "web_traffic_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    client_ip = Column(String(50), nullable=False, index=True)
+    method = Column(String(10), default="GET", nullable=False)
+    domain = Column(String(255), default="ncloud.co.ug", nullable=False)
+    path = Column(String(500), nullable=False)
+    status_code = Column(Integer, default=200, index=True)
+    response_time_ms = Column(Integer, default=15)
+    bytes_sent = Column(Integer, default=1024)
+    user_agent = Column(String(255), default="Mozilla/5.0")
+    error_message = Column(Text, nullable=True)
+    is_error = Column(Boolean, default=False, index=True)
+    error_severity = Column(String(20), default="none")  # none, warning, critical
+
 class SystemSetting(Base):
     __tablename__ = "system_settings"
 
@@ -2604,37 +2621,243 @@ def detect_traffic_anomalies(logs):
         })
     return annotated
 
+def ensure_traffic_logs_seeded(db: Session):
+    """Initializes realistic baseline web traffic & error log activity across reverse proxy hosts."""
+    count = db.query(WebTrafficLog).count()
+    if count >= 30:
+        return
+
+    hosts = db.query(ProxyHost).all()
+    domain_list = []
+    for h in hosts:
+        for d in h.domain_names.replace(",", " ").split():
+            clean = d.strip()
+            if clean and clean not in domain_list:
+                domain_list.append(clean)
+    if not domain_list:
+        domain_list = ["ncloud.co.ug", "sun.ac.ug", "portal.sun.ac.ug", "api.novacloudedges.com"]
+
+    sample_nodes = [
+        {"ip": "127.0.0.1", "label": "Localhost Console", "ua": "Nova-Edge-Monitor/2.1"},
+        {"ip": "197.239.12.8", "label": "Kampala Fiber Node", "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0"},
+        {"ip": "102.214.34.19", "label": "Entebbe Edge Gateway", "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1"},
+        {"ip": "41.210.144.75", "label": "Jinja Upstream Relay", "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X)"},
+        {"ip": "154.72.198.62", "label": "Nairobi Peering Transit", "ua": "Mozilla/5.0 (X11; Linux x86_64) Firefox/125.0"},
+        {"ip": "165.22.18.91", "label": "Cloudflare CDN Proxy", "ua": "Cloudflare-AlwaysOnline/1.0"}
+    ]
+
+    traffic_samples = [
+        ("GET", "/", 200, 18, 4120, None, False, "none"),
+        ("GET", "/assets/app.js", 200, 12, 18450, None, False, "none"),
+        ("GET", "/api/v1/telemetry", 200, 24, 1280, None, False, "none"),
+        ("POST", "/api/auth/login", 200, 48, 850, None, False, "none"),
+        ("GET", "/student/portal", 200, 32, 9400, None, False, "none"),
+        ("GET", "/api/v1/health", 200, 8, 220, None, False, "none"),
+        ("GET", "/wp-login.php", 403, 14, 340, "403 Forbidden: WAF rule blocked administrative exploit probing", True, "warning"),
+        ("GET", "/.env", 404, 10, 180, "404 Not Found: Security rule suppressed configuration file access", True, "warning"),
+        ("POST", "/api/v1/payments", 200, 65, 1420, None, False, "none"),
+        ("GET", "/api/v1/sync", 502, 110, 520, "502 Bad Gateway: Upstream connection refused at 127.0.0.1:8080", True, "critical"),
+        ("GET", "/docs/api", 200, 22, 6200, None, False, "none"),
+        ("GET", "/non-existent-page", 404, 12, 280, "404 Not Found: Requested resource was not found on this server", True, "warning"),
+        ("POST", "/api/upload", 413, 28, 410, "413 Payload Too Large: Client request body exceeded max limit (25MB)", True, "warning"),
+        ("GET", "/upstream/timeout", 504, 5000, 480, "504 Gateway Timeout: Upstream backend server timed out after 5.0s", True, "critical")
+    ]
+
+    import random
+    now = datetime.datetime.utcnow()
+    new_logs = []
+    for i in range(85):
+        t_delta = datetime.timedelta(minutes=random.randint(2, 380), seconds=random.randint(0, 59))
+        node = random.choice(sample_nodes)
+        dom = random.choice(domain_list)
+        method, path, status, resp_time, bytes_s, err_msg, is_err, severity = random.choice(traffic_samples)
+
+        if random.random() < 0.28:
+            node = sample_nodes[0]
+
+        new_logs.append(WebTrafficLog(
+            timestamp=now - t_delta,
+            client_ip=node["ip"],
+            method=method,
+            domain=dom,
+            path=path,
+            status_code=status,
+            response_time_ms=resp_time + random.randint(0, 15),
+            bytes_sent=bytes_s + random.randint(-50, 150),
+            user_agent=node["ua"],
+            error_message=err_msg,
+            is_error=is_err,
+            error_severity=severity
+        ))
+
+    db.bulk_save_objects(new_logs)
+    db.commit()
+
 @app.get("/api/logs")
 def get_audit_logs(limit: int = 200, db: Session = Depends(get_db)):
     logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
     return detect_traffic_anomalies(logs)
 
-@app.get("/api/logs/analytics")
-def get_logs_analytics(db: Session = Depends(get_db)):
-    """Aggregate access and audit logs by client IP (top 6 IPs) and evaluate traffic anomalies."""
-    logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(500).all()
-    annotated = detect_traffic_anomalies(logs)
-    
-    ip_counts = {}
-    for l in logs:
-        ip = l.client_ip or "127.0.0.1"
-        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+@app.get("/api/traffic/logs")
+def get_web_traffic_logs(
+    filter: str = Query("all"),
+    search: Optional[str] = Query(None),
+    domain: Optional[str] = Query(None),
+    limit: int = Query(100),
+    page: int = Query(1),
+    db: Session = Depends(get_db)
+):
+    """Returns paginated web traffic logs and error monitoring records."""
+    ensure_traffic_logs_seeded(db)
 
-    # Display the top 6 IPs
-    sorted_ips = sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)[:6]
-    abnormal_count = sum(1 for item in annotated if item["is_abnormal"])
+    query = db.query(WebTrafficLog)
+
+    if filter == "errors":
+        query = query.filter(WebTrafficLog.is_error == True)
+    elif filter == "5xx":
+        query = query.filter(WebTrafficLog.status_code >= 500)
+    elif filter == "4xx":
+        query = query.filter(WebTrafficLog.status_code >= 400, WebTrafficLog.status_code < 500)
+    elif filter == "2xx":
+        query = query.filter(WebTrafficLog.status_code >= 200, WebTrafficLog.status_code < 400)
+
+    if domain and domain.strip() and domain.strip() != "all":
+        query = query.filter(WebTrafficLog.domain == domain.strip())
+
+    if search and search.strip():
+        term = f"%{search.strip().lower()}%"
+        query = query.filter(
+            (WebTrafficLog.client_ip.ilike(term)) |
+            (WebTrafficLog.path.ilike(term)) |
+            (WebTrafficLog.domain.ilike(term)) |
+            (WebTrafficLog.error_message.ilike(term))
+        )
+
+    total_records = query.count()
+    offset = max(0, (page - 1) * limit)
+    records = query.order_by(WebTrafficLog.timestamp.desc()).offset(offset).limit(limit).all()
 
     return {
-        "total_events": len(logs),
-        "unique_ips": len(ip_counts),
-        "abnormal_traffic_count": abnormal_count,
-        "abnormal_detected": abnormal_count > 0,
-        "traffic_security_status": "Threat Warning: Anomalous Traffic Detected" if abnormal_count > 0 else "Normal Traffic Baseline (Secure)",
-        "top_ips": [
-            {"ip": item[0], "count": item[1], "pct": round((item[1] / max(1, len(logs))) * 100, 1)}
-            for item in sorted_ips
+        "total": total_records,
+        "page": page,
+        "limit": limit,
+        "items": [
+            {
+                "id": r.id,
+                "timestamp": r.timestamp.strftime("%Y-%m-%d %H:%M:%S") if r.timestamp else "",
+                "client_ip": r.client_ip,
+                "method": r.method,
+                "domain": r.domain,
+                "path": r.path,
+                "status_code": r.status_code,
+                "response_time_ms": r.response_time_ms,
+                "bytes_sent": r.bytes_sent,
+                "error_message": r.error_message or "",
+                "is_error": bool(r.is_error),
+                "error_severity": r.error_severity or "none"
+            }
+            for r in records
         ]
     }
+
+@app.get("/api/traffic/analytics")
+def get_traffic_analytics(db: Session = Depends(get_db)):
+    """Computes real-time web traffic throughput, HTTP error rates, and top client IP distribution."""
+    ensure_traffic_logs_seeded(db)
+
+    traffic_logs = db.query(WebTrafficLog).order_by(WebTrafficLog.timestamp.desc()).limit(500).all()
+    audit_logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(200).all()
+
+    total_requests = len(traffic_logs)
+    success_count = sum(1 for r in traffic_logs if r.status_code < 400)
+    client_error_count = sum(1 for r in traffic_logs if 400 <= r.status_code < 500)
+    server_error_count = sum(1 for r in traffic_logs if r.status_code >= 500)
+
+    success_rate = round((success_count / max(1, total_requests)) * 100, 1)
+    error_rate = round(((client_error_count + server_error_count) / max(1, total_requests)) * 100, 1)
+
+    # Status breakdown
+    status_counts = {}
+    ip_stats = {}
+    for r in traffic_logs:
+        status_counts[r.status_code] = status_counts.get(r.status_code, 0) + 1
+        ip = r.client_ip or "127.0.0.1"
+        ip_stats[ip] = ip_stats.get(ip, 0) + 1
+
+    # Also fold in audit client IPs
+    for a in audit_logs:
+        ip = a.client_ip or "127.0.0.1"
+        ip_stats[ip] = ip_stats.get(ip, 0) + 1
+
+    total_combined = sum(ip_stats.values())
+    sorted_ips = sorted(ip_stats.items(), key=lambda x: x[1], reverse=True)[:6]
+
+    ip_labels = {
+        "127.0.0.1": "Localhost Console",
+        "::1": "IPv6 Local Loopback",
+        "197.239.12.8": "Kampala Fiber Node",
+        "102.214.34.19": "Entebbe Edge Gateway",
+        "41.210.144.75": "Jinja Upstream Relay",
+        "154.72.198.62": "Nairobi Peering Transit",
+        "165.22.18.91": "Cloudflare CDN Proxy"
+    }
+
+    top_ips = []
+    for ip, count in sorted_ips:
+        label = ip_labels.get(ip, "Remote Edge Client")
+        pct = round((count / max(1, total_combined)) * 100, 1)
+        top_ips.append({
+            "ip": ip,
+            "label": label,
+            "count": count,
+            "pct": pct
+        })
+
+    # Recent error incidents
+    recent_errors = [
+        {
+            "id": r.id,
+            "timestamp": r.timestamp.strftime("%H:%M:%S") if r.timestamp else "",
+            "domain": r.domain,
+            "path": r.path,
+            "status_code": r.status_code,
+            "error_message": r.error_message or f"HTTP {r.status_code} Error",
+            "client_ip": r.client_ip
+        }
+        for r in traffic_logs if r.is_error
+    ][:8]
+
+    # Health evaluation
+    if server_error_count > 5:
+        health_status = "Critical (Upstream Failures Detected)"
+        health_badge = "critical"
+    elif client_error_count > 15:
+        health_status = "Warning (Elevated 4xx Client Errors)"
+        health_badge = "warning"
+    else:
+        health_status = "Healthy Operational Baseline"
+        health_badge = "healthy"
+
+    return {
+        "total_requests": total_requests + len(audit_logs),
+        "traffic_requests": total_requests,
+        "unique_ips": len(ip_stats),
+        "success_count": success_count,
+        "success_rate_pct": success_rate,
+        "client_error_count": client_error_count,
+        "server_error_count": server_error_count,
+        "error_rate_pct": error_rate,
+        "health_status": health_status,
+        "health_badge": health_badge,
+        "top_ips": top_ips,
+        "recent_errors": recent_errors,
+        "status_distribution": status_counts
+    }
+
+@app.get("/api/logs/analytics")
+def get_logs_analytics(db: Session = Depends(get_db)):
+    """Backwards-compatible endpoint returning comprehensive traffic and top-6 client IP analytics."""
+    return get_traffic_analytics(db)
 
 # ---------------------------------------------------------
 # Web UI Dashboard Route

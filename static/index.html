@@ -171,13 +171,13 @@
 
           <button class="module-nav-card nav-tab-item" data-tab="tab-logs" id="tab-btn-logs" type="button">
             <div class="card-icon-wrap logs-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/></svg>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             </div>
             <div class="card-text-wrap">
               <div class="card-title-row">
-                <span class="card-title">Audit Logs</span>
+                <span class="card-title">Traffic Logs &amp; Errors</span>
               </div>
-              <span class="card-desc">Comprehensive system trail & events</span>
+              <span class="card-desc">Live web access, error monitoring &amp; audit</span>
             </div>
           </button>
 
@@ -787,41 +787,176 @@
         </div>
       </section>
 
-      <!-- TAB 7: AUDIT LOGS & ACCESS ANALYTICS -->
+      <!-- TAB 7: WEB TRAFFIC LOGS, ERROR MONITORING & AUDIT -->
       <section id="tab-logs" class="tab-content" style="display: none;">
-        <!-- Live Access Logs & Traffic by Client IP Graph -->
+        <div class="toolbar-section">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">Web Traffic Logs &amp; Real-Time Error Monitoring</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Real-time HTTP reverse proxy traffic analysis, 4xx/5xx error telemetry, top client IP distribution, and system audit trail</p>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn-secondary btn-sm" id="btn-refresh-traffic">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Refresh Traffic Stream
+            </button>
+          </div>
+        </div>
+
+        <!-- 1. Real-Time Traffic & Error Telemetry KPIs -->
+        <div class="traffic-kpi-grid">
+          <!-- Total Throughput -->
+          <div class="traffic-kpi-card">
+            <div class="traffic-kpi-meta">
+              <span class="traffic-kpi-label">Total HTTP Requests</span>
+              <span class="traffic-kpi-value" id="traffic-kpi-total">-</span>
+              <span class="traffic-kpi-sub">
+                <span id="traffic-kpi-unique-ips">-</span> unique client IPs
+              </span>
+            </div>
+            <div class="traffic-kpi-icon-wrap total">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+          </div>
+
+          <!-- Success Rate -->
+          <div class="traffic-kpi-card">
+            <div class="traffic-kpi-meta">
+              <span class="traffic-kpi-label">Edge Success Rate</span>
+              <span class="traffic-kpi-value" style="color: #34d399;" id="traffic-kpi-success">-</span>
+              <span class="traffic-kpi-sub">2xx / 3xx clean responses</span>
+            </div>
+            <div class="traffic-kpi-icon-wrap success">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+          </div>
+
+          <!-- Client Errors (4xx) -->
+          <div class="traffic-kpi-card">
+            <div class="traffic-kpi-meta">
+              <span class="traffic-kpi-label">Client Errors (4xx)</span>
+              <span class="traffic-kpi-value" style="color: #fbbf24;" id="traffic-kpi-4xx">-</span>
+              <span class="traffic-kpi-sub">404 Not Found &amp; 403 Forbidden</span>
+            </div>
+            <div class="traffic-kpi-icon-wrap client-err">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+          </div>
+
+          <!-- Server / Gateway Errors (5xx) -->
+          <div class="traffic-kpi-card">
+            <div class="traffic-kpi-meta">
+              <span class="traffic-kpi-label">Gateway Incidents (5xx)</span>
+              <span class="traffic-kpi-value" style="color: #f87171;" id="traffic-kpi-5xx">-</span>
+              <span class="traffic-kpi-sub">502 Bad Gateway &amp; upstream drops</span>
+            </div>
+            <div class="traffic-kpi-icon-wrap server-err">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Redesigned Access & Request Distribution by Client IP (Top 6 IPs) -->
         <div class="panel-card access-log-analytics-card">
           <div class="panel-header">
             <div class="panel-title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-              <span>Access &amp; Request Distribution by Client IP (Top 6 IPs)</span>
+              <span>Access &amp; Request Distribution by Client IP (Top 6 Nodes)</span>
             </div>
             <div style="font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-              <span>Total Requests: <strong id="ip-total-events" style="color: var(--secondary);">-</strong></span>
-              <span>Unique IPs: <strong id="ip-unique-count" style="color: var(--accent-emerald);">-</strong></span>
+              <span>Total Logged: <strong id="ip-total-events" style="color: var(--secondary);">-</strong></span>
+              <span>Unique Nodes: <strong id="ip-unique-count" style="color: var(--accent-emerald);">-</strong></span>
               <span id="abnormal-traffic-badge" class="ssl-badge valid" style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.74rem;">
                 <span class="pulse-dot" style="width: 7px; height: 7px;"></span>
                 <span id="abnormal-traffic-text">Normal Baseline</span>
               </span>
             </div>
           </div>
-          <div style="padding: 1.15rem 1.25rem;">
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.85rem 0;">
-              Live traffic breakdown ranking top remote client IPs, source nodes, and administrative interaction frequency (top 6 IPs displayed):
+          <div style="padding: 1rem 1.25rem 0.5rem 1.25rem;">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">
+              Live traffic breakdown ranking top remote client IPs, source nodes, and administrative interaction frequency:
             </p>
-            <div id="access-ip-bars-container" class="ip-bars-grid">
-              <!-- Dynamically populated IP distribution graph -->
-            </div>
+          </div>
+          <div id="access-ip-bars-container" class="ip-cards-container">
+            <!-- Dynamically populated Top 6 IP cards -->
           </div>
         </div>
 
+        <!-- 3. Web Traffic Logs & Error Monitoring Data Table -->
+        <div class="panel-card" style="margin-bottom: 1.5rem;">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="2" x2="22" y1="9" y2="9"/><line x1="7" x2="7" y1="3" y2="9"/></svg>
+              <span>Reverse Proxy HTTP Traffic &amp; Real-Time Error Stream</span>
+            </div>
+            <span style="font-size: 0.78rem; color: var(--text-muted);" id="traffic-stream-status">Live Stream Active</span>
+          </div>
+
+          <div style="padding: 1.15rem 1.25rem 0 1.25rem;">
+            <!-- Subtab filters -->
+            <div class="traffic-subtabs-bar">
+              <button type="button" class="traffic-subtab-btn active" data-filter="all" id="btn-traffic-filter-all">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m10 15 5-3-5-3v6Z"/></svg>
+                <span>All Web Traffic</span>
+              </button>
+              <button type="button" class="traffic-subtab-btn" data-filter="errors" id="btn-traffic-filter-errors">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span>Error Monitoring Only (4xx &amp; 5xx)</span>
+              </button>
+              <button type="button" class="traffic-subtab-btn" data-filter="5xx" id="btn-traffic-filter-5xx">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span>5xx Upstream Gateways</span>
+              </button>
+              <button type="button" class="traffic-subtab-btn" data-filter="4xx" id="btn-traffic-filter-4xx">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>4xx Client Errors</span>
+              </button>
+              <button type="button" class="traffic-subtab-btn" data-filter="2xx" id="btn-traffic-filter-2xx">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>2xx / 3xx Healthy</span>
+              </button>
+            </div>
+
+            <!-- Search and domain selector -->
+            <div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+              <div style="flex: 1; min-width: 240px; position: relative;">
+                <input type="text" id="traffic-search-input" placeholder="Search by Client IP, path, domain, or error message..." style="width: 100%; padding: 0.55rem 0.85rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+              </div>
+              <div style="min-width: 200px;">
+                <select id="traffic-domain-select" style="width: 100%; padding: 0.55rem 0.85rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+                  <option value="all">All Configured Virtual Hosts</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>HTTP Status &amp; Method</th>
+                  <th>Host Domain &amp; Path</th>
+                  <th>Client IP &amp; Node</th>
+                  <th>Response Time</th>
+                  <th>Diagnostics / Upstream Error Details</th>
+                </tr>
+              </thead>
+              <tbody id="traffic-table-body">
+                <!-- Dynamically populated with live web traffic logs & error details -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="traffic-pagination" style="display: none;"></div>
+        </div>
+
+        <!-- 4. Security & Deployment Audit Trail -->
         <div class="panel-card">
           <div class="panel-header">
             <div class="panel-title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
               <span>Security &amp; Deployment Audit Trail (with Traffic Anomaly Detection)</span>
             </div>
-            <button class="btn-secondary btn-sm" id="btn-refresh-logs">Refresh Logs</button>
+            <button class="btn-secondary btn-sm" id="btn-refresh-logs">Refresh Audit Logs</button>
           </div>
           <div class="table-responsive">
             <table class="nova-table">

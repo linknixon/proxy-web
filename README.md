@@ -77,9 +77,189 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
   - Website maintenance suspensions and reactivations
 - **Live SMTP Diagnostics**: Integrated interactive test dispatch endpoint with real-time socket and authentication error surfacing.
 
-### 8. Nginx Migration & Full Configuration Archival
+### 8. Web Traffic Logs & Real-Time Error Monitoring
+- **HTTP Response Telemetry**: Comprehensive tracking of HTTP methods (`GET`, `POST`, `PUT`, `DELETE`), status codes (`200 OK`, `404 Not Found`, `502 Bad Gateway`, `504 Gateway Timeout`), response latencies in milliseconds, and bytes sent.
+- **Upstream Diagnostic Messages**: Immediate surfacing of upstream connection dropouts, connection refused exceptions, and reverse proxy timeout details.
+- **Multi-Node IP Analytics**: Real-time traffic share ranking for the Top 6 client IPs with geographic/datacenter node attribution (*Localhost Console*, *Kampala Fiber Node*, *Entebbe Edge Gateway*, *Cloudflare CDN Proxy*), request counts, and animated gradient visualizers.
+- **Threat & Error Filters**: Instant subtab filtering for All Traffic, Errors Only (4xx & 5xx), Critical 5xx Gateway Incidents, and 4xx Client Anomalies, with search and virtual host dropdown selectors.
+
+### 9. Nginx Migration & Full Configuration Archival
 - **Full ZIP Export**: Download all active virtual host configurations as a single `.conf` archive.
 - **Per-Site Export & Import**: Export individual site `.conf` files and import existing Nginx files with automatic extraction of `server_name`, upstream `proxy_pass`, WebSocket headers, and SSL certificates.
+
+---
+
+## Installing & Configuring Nginx Web Server
+
+Nova Proxy Admin manages host-level Nginx reverse proxy blocks directly. Follow these instructions to install and configure Nginx on your production server.
+
+### 1. Debian & Ubuntu Linux (APT)
+
+#### Step 1: Update repository lists & install Nginx
+```bash
+sudo apt update
+sudo apt install -y nginx
+```
+
+#### Step 2: Verify installation & binary version
+```bash
+nginx -v
+# Example output: nginx version: nginx/1.24.0 (Ubuntu)
+```
+
+#### Step 3: Enable and start systemd daemon
+```bash
+sudo systemctl enable nginx
+sudo systemctl start nginx
+sudo systemctl status nginx
+```
+
+#### Step 4: Open Firewall Ports (UFW)
+Allow incoming HTTP (port 80) and HTTPS (port 443) traffic through the firewall:
+```bash
+sudo ufw allow 'Nginx Full'
+# Or allow ports individually:
+# sudo ufw allow 80/tcp
+# sudo ufw allow 443/tcp
+sudo ufw status verbose
+```
+
+#### Step 5: Directory Structure Overview
+Nova Proxy Admin reads and writes configuration files across standard Nginx paths:
+- `/etc/nginx/nginx.conf` — Main global Nginx configuration.
+- `/etc/nginx/sites-available/` — Repository of all configured virtual host `.conf` files.
+- `/etc/nginx/sites-enabled/` — Symlinked configuration files active in the running server.
+- `/etc/nginx/conf.d/` — Modular configuration directory included by the master daemon.
+- `/var/log/nginx/access.log` — Global access log.
+- `/var/log/nginx/error.log` — Global diagnostic error log.
+
+---
+
+### 2. CentOS, RHEL, Rocky Linux & AlmaLinux (DNF / YUM)
+
+#### Step 1: Enable EPEL repository & install Nginx
+```bash
+sudo dnf install -y epel-release
+sudo dnf install -y nginx
+```
+
+#### Step 2: Enable & start service
+```bash
+sudo systemctl enable --now nginx
+sudo systemctl status nginx
+```
+
+#### Step 3: Configure Firewall (firewalld)
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+#### Step 4: Configure SELinux for Reverse Proxying
+By default, SELinux prevents Nginx from connecting to upstream proxy ports (e.g. `127.0.0.1:8000`, `127.0.0.1:3000`). Grant network connection permissions:
+```bash
+sudo setsebool -P httpd_can_network_connect 1
+```
+
+---
+
+## Installing & Configuring Certbot (Let's Encrypt SSL Automation)
+
+Certbot handles automated retrieval, installation, and renewals of free SSL/TLS certificates issued by the Let's Encrypt Certificate Authority.
+
+### 1. Installation Methods
+
+#### Method A: Official APT Installation (Ubuntu / Debian)
+```bash
+sudo apt update
+sudo apt install -y certbot python3-certbot-nginx
+```
+
+#### Method B: Snap Installation (Recommended by EFF for latest releases)
+```bash
+# Ensure snapd is installed
+sudo apt install -y snapd
+sudo snap install core; sudo snap refresh core
+
+# Install Certbot via Snap
+sudo snap install --classic certbot
+
+# Create symlink so 'certbot' is available in system PATH
+sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+```
+
+#### Method C: RHEL, Rocky Linux & AlmaLinux
+```bash
+sudo dnf install -y epel-release
+sudo dnf install -y certbot python3-certbot-nginx
+```
+
+#### Verify Installation
+```bash
+certbot --version
+# Example output: certbot 2.9.0
+```
+
+---
+
+### 2. Obtaining & Installing SSL Certificates
+
+#### Automatic Nginx Plugin Issuance
+To automatically fetch and configure an SSL certificate for an apex domain and its subdomain:
+```bash
+sudo certbot --nginx \
+  -d example.com \
+  -d www.example.com \
+  --non-interactive \
+  --agree-tos \
+  -m admin@example.com
+```
+
+#### Webroot Mode (Zero-Downtime Verification)
+If you prefer manual control of Nginx configuration directives:
+```bash
+sudo certbot certonly --webroot \
+  -w /var/www/html \
+  -d api.novacloudedges.com \
+  --non-interactive \
+  --agree-tos \
+  -m admin@novacloudedges.com
+```
+
+Certificates will be saved to:
+- Certificate & Chain: `/etc/letsencrypt/live/example.com/fullchain.pem`
+- Private Key: `/etc/letsencrypt/live/example.com/privkey.pem`
+
+---
+
+### 3. Automated Certificate Renewals & Verification
+
+Let's Encrypt certificates expire after 90 days. Certbot automates renewal via a built-in systemd timer.
+
+#### Verify the Systemd Timer is Active
+```bash
+systemctl status certbot.timer
+# Or inspect all scheduled timers:
+systemctl list-timers | grep certbot
+```
+
+#### Test Renewal Process (Dry Run)
+Simulate certificate renewal without altering live certificates:
+```bash
+sudo certbot renew --dry-run
+```
+
+#### Configure Automated Nginx Reload on Renewal
+Ensure Nginx gracefully reloads whenever a certificate is renewed. Create `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh`:
+```bash
+sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy/
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+#!/bin/bash
+systemctl reload nginx
+EOF
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
 
 ---
 

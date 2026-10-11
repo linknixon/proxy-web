@@ -647,61 +647,405 @@
 }
 
 /* Access Log IP Traffic Graph & Analytics */
-.access-log-analytics-card {
+/* Traffic & Error Analytics KPI Grid */
+.traffic-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 1rem;
   margin-bottom: 1.25rem;
+}
+
+.traffic-kpi-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
   padding: 1.15rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.traffic-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.3);
+}
+
+.traffic-kpi-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.traffic-kpi-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.traffic-kpi-value {
+  font-size: 1.65rem;
+  font-weight: 900;
+  color: var(--text-main);
+  line-height: 1.1;
+  font-family: var(--font-primary);
+}
+
+.traffic-kpi-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
+
+.traffic-kpi-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.traffic-kpi-icon-wrap.total {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.traffic-kpi-icon-wrap.success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.traffic-kpi-icon-wrap.client-err {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.traffic-kpi-icon-wrap.server-err {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+/* Redesigned Access & Request Distribution by Client IP (Top 6 IPs) */
+.access-log-analytics-card {
+  margin-bottom: 1.5rem;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 14px;
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
 }
 
-.ip-bars-grid {
+.ip-cards-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.ip-distribution-card {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 11px;
+  padding: 1rem 1.15rem;
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  margin-top: 0.85rem;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
-.ip-bar-row {
+.ip-distribution-card:hover {
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(15, 23, 42, 0.75);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px -4px rgba(0, 0, 0, 0.3);
+}
+
+.ip-distribution-card.is-localhost {
+  border-left: 3px solid #10b981;
+}
+
+.ip-distribution-card.is-remote {
+  border-left: 3px solid #38bdf8;
+}
+
+.ip-card-header-row {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
-  font-size: 0.82rem;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
-.ip-bar-label {
-  width: 135px;
-  flex-shrink: 0;
-  font-weight: 600;
+.ip-card-address-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ip-card-address {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88rem;
+  font-weight: 700;
   color: var(--text-main);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.ip-bar-track {
-  flex: 1;
-  height: 10px;
-  background: rgba(148, 163, 184, 0.16);
+.ip-node-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ip-node-badge.node-localhost {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.ip-node-badge.node-remote {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.ip-node-badge.node-vpn {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.ip-card-stats-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ip-card-count {
+  font-weight: 800;
+  color: var(--text-main);
+  font-size: 0.92rem;
+}
+
+.ip-card-pct-badge {
+  font-weight: 800;
+  font-size: 0.82rem;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+}
+
+.ip-card-bar-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(148, 163, 184, 0.12);
   border-radius: 9999px;
   overflow: hidden;
   position: relative;
 }
 
-.ip-bar-fill {
+.ip-card-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--secondary), #38bdf8);
   border-radius: 9999px;
-  transition: width 0.5s ease;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
 }
 
-.ip-bar-val {
-  width: 85px;
-  text-align: right;
-  flex-shrink: 0;
-  font-weight: 700;
+.ip-card-bar-fill.fill-localhost {
+  background: linear-gradient(90deg, #10b981, #059669);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+.ip-card-bar-fill.fill-remote {
+  background: linear-gradient(90deg, #38bdf8, #6366f1);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
+.ip-card-footer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
   color: var(--text-muted);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 0.45rem;
+  margin-top: 0.1rem;
+}
+
+/* HTTP Traffic Status Badges */
+.http-status-pill {
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.http-status-pill.status-2xx {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.http-status-pill.status-3xx {
+  background: rgba(14, 165, 233, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.35);
+}
+
+.http-status-pill.status-4xx {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.http-status-pill.status-5xx {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+}
+
+.http-method-pill {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase;
+}
+
+.http-method-pill.method-get {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.http-method-pill.method-post {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.http-method-pill.method-put,
+.http-method-pill.method-patch {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.http-method-pill.method-delete {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.latency-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  color: var(--text-muted);
+}
+
+.latency-pill.fast {
+  color: #34d399;
+}
+
+.latency-pill.medium {
+  color: #38bdf8;
+}
+
+.latency-pill.slow {
+  color: #fbbf24;
+}
+
+.latency-pill.critical {
+  color: #f87171;
+}
+
+/* Traffic Subtab Toggle Bar */
+.traffic-subtabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.traffic-subtab-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 0.45rem 0.9rem;
   font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.traffic-subtab-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.traffic-subtab-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.traffic-subtab-btn.active.errors-active {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.traffic-error-detail-box {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.74rem;
+  color: #fca5a5;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  margin-top: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 /* Modern Data Table Pagination Controls */

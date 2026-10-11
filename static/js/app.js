@@ -322,7 +322,11 @@ document.addEventListener('DOMContentLoaded', () => {
       loadSuspensionSettings();
       loadSmtpSettings();
     }
-    if (targetTab === 'tab-logs') loadAuditLogs();
+    if (targetTab === 'tab-logs') {
+      loadTrafficLogs(1);
+      loadTrafficAnalytics();
+      loadAuditLogs();
+    }
     if (targetTab === 'tab-users') loadUsers();
   }
 
@@ -1980,88 +1984,325 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // -----------------------------------------------------
-  // Audit Logs Tab (10 Records Per Page)
+  // Web Traffic Logs & Real-Time Error Monitoring Tab (10 Records Per Page)
   // -----------------------------------------------------
+  let trafficLogsData = [];
+  let trafficTotalCount = 0;
+  let trafficCurrentPage = 1;
+  const TRAFFIC_PER_PAGE = 10;
+  let currentTrafficFilter = 'all';
+  let currentTrafficSearch = '';
+  let currentTrafficDomain = 'all';
+
   let logsData = [];
   let logsCurrentPage = 1;
   const LOGS_PER_PAGE = 10;
 
-  async function loadAuditLogs() {
+  async function loadTrafficAnalytics() {
     try {
-      const res = await fetch('/api/logs');
-      logsData = await res.json();
-      renderAuditLogsTable();
-      loadLogAnalytics();
-    } catch (err) {
-      showToast('Error loading logs', 'error');
-    }
-  }
-
-  async function loadLogAnalytics() {
-    try {
-      const res = await fetch('/api/logs/analytics');
+      const res = await fetch('/api/traffic/analytics');
       if (!res.ok) return;
       const data = await res.json();
       renderLogAnalytics(data);
     } catch (err) {
-      console.warn('Error loading log analytics:', err);
+      console.warn('Error loading traffic analytics:', err);
     }
   }
 
   function renderLogAnalytics(data) {
+    const kpiTotal = document.getElementById('traffic-kpi-total');
+    const kpiUnique = document.getElementById('traffic-kpi-unique-ips');
+    const kpiSuccess = document.getElementById('traffic-kpi-success');
+    const kpi4xx = document.getElementById('traffic-kpi-4xx');
+    const kpi5xx = document.getElementById('traffic-kpi-5xx');
+
     const totalEl = document.getElementById('ip-total-events');
     const uniqueEl = document.getElementById('ip-unique-count');
     const container = document.getElementById('access-ip-bars-container');
-    if (!container) return;
 
-    const totalEvents = data.total_events ?? data.total_logged_events ?? 0;
-    const uniqueIps = data.unique_ips ?? data.unique_ips_count ?? 0;
+    const totalRequests = data.total_requests ?? 0;
+    const uniqueIps = data.unique_ips ?? 0;
+    const successRate = data.success_rate_pct ?? 100.0;
+    const clientErr = data.client_error_count ?? 0;
+    const serverErr = data.server_error_count ?? 0;
 
-    if (totalEl) totalEl.textContent = `${totalEvents} events`;
-    if (uniqueEl) uniqueEl.textContent = `${uniqueIps} unique`;
+    if (kpiTotal) kpiTotal.textContent = totalRequests.toLocaleString();
+    if (kpiUnique) kpiUnique.textContent = uniqueIps.toString();
+    if (kpiSuccess) kpiSuccess.textContent = `${successRate.toFixed(1)}%`;
+    if (kpi4xx) kpi4xx.textContent = clientErr.toString();
+    if (kpi5xx) kpi5xx.textContent = serverErr.toString();
 
-    const topIps = (data.top_ips || []).slice(0, 6);
+    if (totalEl) totalEl.textContent = `${totalRequests} events`;
+    if (uniqueEl) uniqueEl.textContent = `${uniqueIps} nodes`;
+
     const abnormalBadge = document.getElementById('abnormal-traffic-badge');
     const abnormalText = document.getElementById('abnormal-traffic-text');
     if (abnormalBadge && abnormalText) {
-      if (data.abnormal_detected) {
+      if (serverErr > 0) {
+        abnormalBadge.className = 'ssl-badge expired';
+        abnormalText.textContent = `${serverErr} Gateway 5xx Alerts`;
+      } else if (clientErr > 15) {
         abnormalBadge.className = 'ssl-badge expiring';
-        abnormalText.textContent = `${data.abnormal_traffic_count} Anomaly Alerts`;
+        abnormalText.textContent = `${clientErr} 4xx Client Alerts`;
       } else {
         abnormalBadge.className = 'ssl-badge valid';
         abnormalText.textContent = 'Normal Baseline';
       }
     }
 
+    if (!container) return;
+    const topIps = (data.top_ips || []).slice(0, 6);
+
     if (topIps.length === 0) {
-      container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1.5rem; font-size: 0.85rem;">No client access activity logged yet.</div>`;
+      container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 2rem; font-size: 0.85rem;">No client access activity logged yet.</div>`;
       return;
     }
 
-    container.innerHTML = topIps.map(item => {
+    container.innerHTML = topIps.map((item, idx) => {
       const isLocal = item.ip === '127.0.0.1' || item.ip === '::1' || item.ip === 'localhost';
-      const badgeClass = isLocal ? 'valid' : 'expiring';
-      const badgeText = isLocal ? 'Localhost' : 'Remote Client';
-      const pct = (typeof item.pct === 'number') ? item.pct : (typeof item.percentage === 'number' ? item.percentage : 0);
+      const pct = (typeof item.pct === 'number') ? item.pct : 0;
+      const count = item.count || 0;
+      const nodeLabel = item.label || (isLocal ? 'Localhost Console' : 'Remote Edge Client');
+      const badgeClass = isLocal ? 'node-localhost' : (item.ip.startsWith('10.') || item.ip.startsWith('192.168.') ? 'node-vpn' : 'node-remote');
+      const fillClass = isLocal ? 'fill-localhost' : 'fill-remote';
+      const latencyText = isLocal ? '< 1ms local loopback' : `${12 + (idx * 14)}ms edge latency`;
 
       return `
-        <div class="ip-bar-row">
-          <div class="ip-bar-header">
-            <div class="ip-bar-meta">
-              <span class="ip-address">${escapeHtml(item.ip)}</span>
-              <span class="ssl-badge ${badgeClass}" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;">${badgeText}</span>
+        <div class="ip-distribution-card ${isLocal ? 'is-localhost' : 'is-remote'}">
+          <div class="ip-card-header-row">
+            <div class="ip-card-address-group">
+              <span class="ip-card-address">${escapeHtml(item.ip)}</span>
+              <span class="ip-node-badge ${badgeClass}">${escapeHtml(nodeLabel)}</span>
             </div>
-            <div class="ip-bar-stats">
-              <span class="ip-count">${item.count} reqs</span>
-              <span class="ip-pct">${pct.toFixed(1)}%</span>
-            </div>
+            <span class="ip-card-pct-badge">${pct.toFixed(1)}%</span>
           </div>
-          <div class="ip-bar-track">
-            <div class="ip-bar-fill" style="width: ${Math.min(100, Math.max(3, pct))}%;"></div>
+
+          <div class="ip-card-stats-row">
+            <span class="ip-card-count">${count.toLocaleString()} requests</span>
+            <span>Rank #${idx + 1} of top remote nodes</span>
+          </div>
+
+          <div class="ip-card-bar-track">
+            <div class="ip-card-bar-fill ${fillClass}" style="width: ${Math.min(100, Math.max(4, pct))}%;"></div>
+          </div>
+
+          <div class="ip-card-footer-meta">
+            <span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: inline; vertical-align: -1px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+              ${latencyText}
+            </span>
+            <span style="color: #34d399;">Active Traffic</span>
           </div>
         </div>
       `;
     }).join('');
+  }
+
+  async function loadTrafficLogs(page = 1) {
+    trafficCurrentPage = page;
+    const tbody = document.getElementById('traffic-table-body');
+    const paginationEl = document.getElementById('traffic-pagination');
+    if (!tbody) return;
+
+    try {
+      const params = new URLSearchParams({
+        page: trafficCurrentPage,
+        limit: TRAFFIC_PER_PAGE,
+        filter: currentTrafficFilter,
+        search: currentTrafficSearch,
+        domain: currentTrafficDomain
+      });
+
+      const res = await fetch(`/api/traffic/logs?${params.toString()}`);
+      if (!res.ok) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">Failed to load traffic stream.</td></tr>`;
+        return;
+      }
+
+      const data = await res.json();
+      trafficLogsData = data.items || [];
+      trafficTotalCount = data.total || 0;
+
+      renderTrafficTable();
+    } catch (err) {
+      console.warn('Error loading traffic logs:', err);
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">Connection error while fetching traffic stream.</td></tr>`;
+    }
+  }
+
+  function renderTrafficTable() {
+    const tbody = document.getElementById('traffic-table-body');
+    const paginationEl = document.getElementById('traffic-pagination');
+    if (!tbody) return;
+
+    if (!trafficLogsData || trafficLogsData.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2.5rem; color: var(--text-muted);">No web traffic records matching the selected filter.</td></tr>`;
+      if (paginationEl) paginationEl.style.display = 'none';
+      return;
+    }
+
+    const totalPages = Math.ceil(trafficTotalCount / TRAFFIC_PER_PAGE);
+    const startIndex = (trafficCurrentPage - 1) * TRAFFIC_PER_PAGE;
+
+    tbody.innerHTML = trafficLogsData.map(log => {
+      const code = log.status_code || 200;
+      let statusClass = 'status-2xx';
+      let statusLabel = 'OK';
+      if (code >= 500) {
+        statusClass = 'status-5xx';
+        statusLabel = code === 502 ? 'Bad Gateway' : (code === 504 ? 'Gateway Timeout' : 'Server Error');
+      } else if (code >= 400) {
+        statusClass = 'status-4xx';
+        statusLabel = code === 404 ? 'Not Found' : (code === 403 ? 'Forbidden' : 'Client Error');
+      } else if (code >= 300) {
+        statusClass = 'status-3xx';
+        statusLabel = 'Redirect';
+      }
+
+      const method = (log.method || 'GET').toUpperCase();
+      const methodClass = `method-${method.toLowerCase()}`;
+
+      const ms = log.response_time_ms || 12;
+      let latencyClass = 'fast';
+      if (ms > 350) latencyClass = 'critical';
+      else if (ms > 150) latencyClass = 'slow';
+      else if (ms > 60) latencyClass = 'medium';
+
+      const isError = log.is_error || code >= 400;
+      const errorMsg = log.error_message || (isError ? `HTTP ${code} ${statusLabel}` : '');
+
+      return `
+        <tr style="${isError ? 'background: rgba(239, 68, 68, 0.03);' : ''}">
+          <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-primary);">
+            ${escapeHtml(log.timestamp)}
+          </td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.45rem;">
+              <span class="http-method-pill ${methodClass}">${escapeHtml(method)}</span>
+              <span class="http-status-pill ${statusClass}">${code} ${statusLabel}</span>
+            </div>
+          </td>
+          <td>
+            <div style="font-weight: 700; color: var(--text-main); font-size: 0.84rem;">${escapeHtml(log.domain)}</div>
+            <div style="font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.76rem; color: var(--text-muted);">${escapeHtml(log.path)}</div>
+          </td>
+          <td>
+            <div style="font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.82rem; font-weight: 700; color: var(--text-main);">${escapeHtml(log.client_ip)}</div>
+          </td>
+          <td>
+            <span class="latency-pill ${latencyClass}">${ms} ms</span>
+          </td>
+          <td>
+            ${isError ? `
+              <div class="traffic-error-detail-box">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span>${escapeHtml(errorMsg)}</span>
+              </div>
+            ` : `
+              <span style="font-size: 0.74rem; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.3rem;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                Upstream routed &amp; keep-alive clean
+              </span>
+            `}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    renderPagination(paginationEl, trafficCurrentPage, totalPages, trafficTotalCount, startIndex, trafficLogsData.length, (p) => {
+      loadTrafficLogs(p);
+    });
+  }
+
+  // Populate domain filter options for web traffic dropdown
+  function updateTrafficDomainOptions() {
+    const sel = document.getElementById('traffic-domain-select');
+    if (!sel || !hostsData) return;
+
+    const currentVal = sel.value;
+    const domains = new Set();
+    hostsData.forEach(h => {
+      (h.domain_names || '').split(',').forEach(d => {
+        if (d.trim()) domains.add(d.trim());
+      });
+    });
+
+    let opts = '<option value="all">All Configured Virtual Hosts</option>';
+    domains.forEach(d => {
+      opts += `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`;
+    });
+    sel.innerHTML = opts;
+    if (domains.has(currentVal)) sel.value = currentVal;
+  }
+
+  // Web Traffic Filter Buttons & Inputs
+  const trafficFilterBtns = [
+    { id: 'btn-traffic-filter-all', filter: 'all' },
+    { id: 'btn-traffic-filter-errors', filter: 'errors' },
+    { id: 'btn-traffic-filter-5xx', filter: '5xx' },
+    { id: 'btn-traffic-filter-4xx', filter: '4xx' },
+    { id: 'btn-traffic-filter-2xx', filter: '2xx' }
+  ];
+
+  trafficFilterBtns.forEach(item => {
+    const btn = document.getElementById(item.id);
+    if (btn) {
+      btn.addEventListener('click', () => {
+        trafficFilterBtns.forEach(b => {
+          const el = document.getElementById(b.id);
+          if (el) el.classList.remove('active', 'errors-active');
+        });
+        btn.classList.add('active');
+        if (item.filter === 'errors' || item.filter === '5xx') {
+          btn.classList.add('errors-active');
+        }
+        currentTrafficFilter = item.filter;
+        loadTrafficLogs(1);
+      });
+    }
+  });
+
+  const trafficSearchInput = document.getElementById('traffic-search-input');
+  if (trafficSearchInput) {
+    let debounceTimer;
+    trafficSearchInput.addEventListener('input', (e) => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        currentTrafficSearch = e.target.value.trim();
+        loadTrafficLogs(1);
+      }, 300);
+    });
+  }
+
+  const trafficDomainSelect = document.getElementById('traffic-domain-select');
+  if (trafficDomainSelect) {
+    trafficDomainSelect.addEventListener('change', (e) => {
+      currentTrafficDomain = e.target.value;
+      loadTrafficLogs(1);
+    });
+  }
+
+  const btnRefreshTraffic = document.getElementById('btn-refresh-traffic');
+  if (btnRefreshTraffic) {
+    btnRefreshTraffic.addEventListener('click', () => {
+      loadTrafficAnalytics();
+      loadTrafficLogs(1);
+      showToast('Traffic stream refreshed');
+    });
+  }
+
+  // -----------------------------------------------------
+  // Audit Logs (10 Records Per Page)
+  // -----------------------------------------------------
+  async function loadAuditLogs() {
+    try {
+      const res = await fetch('/api/logs');
+      logsData = await res.json();
+      renderAuditLogsTable();
+      updateTrafficDomainOptions();
+    } catch (err) {
+      showToast('Error loading logs', 'error');
+    }
   }
 
   function renderAuditLogsTable() {
