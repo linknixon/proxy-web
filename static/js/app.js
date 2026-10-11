@@ -101,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function handleLogout(isSessionExpired = false) {
-    const token = localStorage.getItem('nova_session_token');
+    const token = localStorage.getItem('nova_session_token') || localStorage.getItem('nova_token');
     try {
       if (token) {
         await fetch('/api/auth/logout', {
@@ -110,8 +110,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
     } catch (e) {}
+    localStorage.removeItem('nova_token');
     localStorage.removeItem('nova_session_token');
+    localStorage.removeItem('nova_role');
+    localStorage.removeItem('nova_user');
+    localStorage.removeItem('nova_fullname');
     localStorage.removeItem('nova_current_user');
+    localStorage.removeItem('nova_last_active');
     window.location.href = isSessionExpired ? '/login?session_expired=1' : '/login?logged_out=1';
   }
 
@@ -2380,20 +2385,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (btnUserProfile && userProfileDropdown) {
       btnUserProfile.addEventListener('click', (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        const isOpen = userProfileDropdown.style.display === 'block';
-        userProfileDropdown.style.display = isOpen ? 'none' : 'block';
+        const isOpen = userProfileDropdown.classList.contains('show') || userProfileDropdown.style.display === 'block';
+        if (isOpen) {
+          userProfileDropdown.classList.remove('show');
+          userProfileDropdown.style.display = 'none';
+        } else {
+          userProfileDropdown.classList.add('show');
+          userProfileDropdown.style.display = 'block';
+        }
       });
 
       document.addEventListener('click', (e) => {
         if (!userProfileDropdown.contains(e.target) && !btnUserProfile.contains(e.target)) {
+          userProfileDropdown.classList.remove('show');
           userProfileDropdown.style.display = 'none';
         }
       });
     }
 
+    const btnNavLogout = document.getElementById('btn-navbar-logout');
+    if (btnNavLogout) {
+      btnNavLogout.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleLogout(false);
+      });
+    }
+
     if (btnDropdownLogout) {
-      btnDropdownLogout.addEventListener('click', () => {
+      btnDropdownLogout.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         handleLogout(false);
       });
     }
