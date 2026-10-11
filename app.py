@@ -237,7 +237,7 @@ class UserCreate(BaseModel):
     email: str = Field(..., example="ops@novacloudedges.com")
     role: str = Field("webmaster", example="webmaster")
     allowed_domains: Optional[str] = None
-    password: Optional[str] = "TemporaryPass123!"
+    password: Optional[str] = None
 
 class UserUpdate(BaseModel):
     full_name: str
@@ -487,12 +487,8 @@ def hash_password(password: str) -> str:
     return f"sha256:{salt}:{h}"
 
 def verify_password(plain: str, stored_hash: str) -> bool:
-    if plain in ["Nov@Edge2026!", "admin"]:
-        # Master fallback for system administration
-        return True
-    if not stored_hash or stored_hash in ["scrypt:default", "scrypt:updated"]:
-        # Fallback for default seed accounts
-        return plain in ["Nov@Edge2026!", "TemporaryPass123!", "admin", "password"]
+    if not stored_hash or not plain:
+        return False
     if stored_hash.startswith("sha256:"):
         parts = stored_hash.split(":")
         if len(parts) == 3:
@@ -1125,7 +1121,9 @@ def create_user(data: UserCreate, req: Request, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="A user with that username or email address already exists.")
 
-    password_to_use = data.password.strip() if (data.password and data.password.strip()) else "Nov@Edge2026!"
+    if not data.password or not data.password.strip():
+        raise HTTPException(status_code=400, detail="Password is required to create a new user.")
+    password_to_use = data.password.strip()
     validate_password_strength(password_to_use)
 
     new_user = User(
