@@ -27,16 +27,52 @@
             <span>UFW &amp; Nginx Active</span>
           </div>
 
-          <div class="status-indicator-pill" id="nav-user-pill" style="gap: 0.5rem;">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--secondary);"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <span id="nav-username-display" style="font-weight: 700; color: var(--text-main);">Admin</span>
-            <span class="badge-tag" id="nav-userrole-display" style="font-size: 0.68rem; padding: 0.1rem 0.4rem; background: rgba(2, 132, 199, 0.15); color: var(--secondary); border-radius: 4px; text-transform: uppercase;">super admin</span>
+          <!-- Circular User Profile in Header Corner -->
+          <div class="user-profile-widget" style="position: relative;">
+            <button class="circular-profile-btn" id="btn-user-profile" type="button" title="View Profile & Change Password">
+              <span class="avatar-initials" id="nav-avatar-initials">SA</span>
+              <span class="avatar-status-dot"></span>
+            </button>
+
+            <!-- User Profile Dropdown Menu -->
+            <div class="profile-dropdown-card" id="user-profile-dropdown" style="display: none;">
+              <div class="profile-dropdown-header">
+                <div class="profile-dropdown-avatar">
+                  <span id="dropdown-avatar-initials">SA</span>
+                </div>
+                <div class="profile-dropdown-details">
+                  <div class="profile-fullname" id="nav-dropdown-fullname">Nova Super Admin</div>
+                  <div class="profile-username" id="nav-dropdown-username">@superadmin</div>
+                  <span class="profile-role-badge" id="nav-dropdown-role">SUPER ADMIN</span>
+                </div>
+              </div>
+
+              <div class="profile-dropdown-meta">
+                <div class="profile-meta-label">Registered Email:</div>
+                <div class="profile-meta-val" id="nav-dropdown-email">admin@novacloudedges.com</div>
+                <div class="profile-email-note">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                  <span>Email is managed by Super Admin (read-only)</span>
+                </div>
+              </div>
+
+              <div class="profile-dropdown-actions">
+                <button type="button" class="profile-action-btn" id="btn-open-change-pass">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  <span>Change Password</span>
+                </button>
+                <button type="button" class="profile-action-btn btn-danger-action" id="btn-dropdown-logout">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            </div>
           </div>
 
-          <button class="btn-secondary btn-sm" id="btn-logout" title="Sign out of administrative console" style="padding: 0.35rem 0.65rem; border-radius: 8px; font-size: 0.76rem; display: inline-flex; align-items: center; gap: 0.35rem;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-            <span>Sign Out</span>
-          </button>
+          <!-- Hidden compatibility elements for existing script hooks -->
+          <span id="nav-username-display" style="display: none;">Admin</span>
+          <span id="nav-userrole-display" style="display: none;">super admin</span>
+          <button id="btn-logout" style="display: none;"></button>
 
           <button class="theme-toggle-btn" id="theme-toggle" title="Toggle Light / Dark Mode">
             <span id="theme-icon" style="display: inline-flex; align-items: center;">
@@ -848,6 +884,40 @@
           </div>
           <div class="pagination-wrapper" id="users-pagination" style="display: none;"></div>
         </div>
+
+        <!-- Role Feature Access & Permissions Matrix (Super Admin Managed) -->
+        <div class="panel-card" style="margin-top: 1.5rem;" id="role-matrix-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+              <span>Role Access Features &amp; Permissions Matrix</span>
+            </div>
+            <button class="btn-primary btn-sm" id="btn-save-role-matrix" type="button">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Save Role Features</span>
+            </button>
+          </div>
+          <div style="padding: 0.85rem 1.25rem; font-size: 0.8rem; color: var(--text-muted); background: rgba(2, 132, 199, 0.05); border-bottom: 1px solid var(--border-color); line-height: 1.5;">
+            Configure granular feature permissions across system roles. Webmasters are restricted to assigned host capabilities and cannot view or manage team members. Only Super Admin has rights to manage users and edit role permissions.
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table" id="table-role-matrix">
+              <thead>
+                <tr>
+                  <th>Feature / Capability</th>
+                  <th>Module Description</th>
+                  <th style="text-align: center;">Webmaster</th>
+                  <th style="text-align: center;">Security Analyst</th>
+                  <th style="text-align: center;">Billing Officer</th>
+                  <th style="text-align: center;">Super Admin</th>
+                </tr>
+              </thead>
+              <tbody id="role-matrix-body">
+                <!-- Dynamically populated or rendered -->
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
     </main>
 
@@ -1049,7 +1119,13 @@
 
           <div style="margin-bottom: 1rem;">
             <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Password <span id="user-pass-hint" style="color: var(--text-muted); font-size: 0.74rem;">(Set initial password)</span></label>
-            <input type="password" id="user-password" value="Nov@Proxy2026!" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+            <div class="password-field-wrapper">
+              <input type="password" id="user-password" value="Nov@Proxy2026!" style="width: 100%; padding: 0.55rem 2.6rem 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              <button type="button" class="btn-eye-toggle" data-target="user-password" title="Toggle visibility">
+                <svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-closed" style="display: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
           </div>
 
           <div id="user-status-group" style="display: none; padding: 0.65rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px;">
@@ -1065,6 +1141,68 @@
         <div class="modal-footer">
           <button type="button" class="btn-secondary" id="btn-cancel-user-modal">Cancel</button>
           <button type="submit" class="btn-primary" id="btn-save-user">Save Account</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: CHANGE USER PASSWORD (FROM PROFILE) -->
+  <div class="modal-overlay" id="change-pass-modal">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <div class="card-icon-wrap hosts-icon" style="width: 28px; height: 28px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3 class="panel-title">Change Account Password</h3>
+        </div>
+        <button class="btn-icon" id="btn-close-change-pass-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="change-pass-form">
+        <div class="modal-body">
+          <div style="background: rgba(2, 132, 199, 0.08); border: 1px solid rgba(2, 132, 199, 0.2); border-radius: 9px; padding: 0.75rem 0.95rem; margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-muted); line-height: 1.45;">
+            <div><strong>Account Email:</strong> <span id="cp-user-email-display" style="color: var(--text-main); font-weight: 700;">admin@novacloudedges.com</span></div>
+            <div style="font-size: 0.73rem; color: var(--secondary); margin-top: 0.25rem;">Note: Email address is managed by Super Admin and cannot be edited by user.</div>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Current Password *</label>
+            <div class="password-field-wrapper">
+              <input type="password" id="cp-current-password" required placeholder="Enter current password" style="width: 100%; padding: 0.55rem 2.6rem 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              <button type="button" class="btn-eye-toggle" data-target="cp-current-password" title="Toggle visibility">
+                <svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-closed" style="display: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">New Password *</label>
+            <div class="password-field-wrapper">
+              <input type="password" id="cp-new-password" required placeholder="Min 8 chars, mixed case & numbers" style="width: 100%; padding: 0.55rem 2.6rem 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              <button type="button" class="btn-eye-toggle" data-target="cp-new-password" title="Toggle visibility">
+                <svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-closed" style="display: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Confirm New Password *</label>
+            <div class="password-field-wrapper">
+              <input type="password" id="cp-confirm-password" required placeholder="Retype new password" style="width: 100%; padding: 0.55rem 2.6rem 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              <button type="button" class="btn-eye-toggle" data-target="cp-confirm-password" title="Toggle visibility">
+                <svg class="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-closed" style="display: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" id="btn-cancel-change-pass">Cancel</button>
+          <button type="submit" class="btn-primary" id="btn-submit-change-pass">Update Password</button>
         </div>
       </form>
     </div>

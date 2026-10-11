@@ -47,11 +47,41 @@ document.addEventListener('DOMContentLoaded', () => {
         if (navUserDisplay) navUserDisplay.textContent = data.user.full_name || data.user.username;
         if (navRoleDisplay) navRoleDisplay.textContent = getRoleTitle(data.user.role);
 
+        updateUserProfileUI(data.user);
         applyRolePermissions(activeRole);
       }
     } catch (err) {
       console.warn('Session verification fallback:', err);
     }
+  }
+
+  function getInitials(name) {
+    if (!name) return 'AD';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  }
+
+  function updateUserProfileUI(user) {
+    if (!user) return;
+    const initials = getInitials(user.full_name || user.username);
+    const navInitials = document.getElementById('nav-avatar-initials');
+    const dropdownInitials = document.getElementById('dropdown-avatar-initials');
+    const dropdownFullname = document.getElementById('nav-dropdown-fullname');
+    const dropdownUsername = document.getElementById('nav-dropdown-username');
+    const dropdownRole = document.getElementById('nav-dropdown-role');
+    const dropdownEmail = document.getElementById('nav-dropdown-email');
+    const cpEmail = document.getElementById('cp-user-email-display');
+
+    if (navInitials) navInitials.textContent = initials;
+    if (dropdownInitials) dropdownInitials.textContent = initials;
+    if (dropdownFullname) dropdownFullname.textContent = user.full_name || user.username;
+    if (dropdownUsername) dropdownUsername.textContent = '@' + user.username;
+    if (dropdownRole) dropdownRole.textContent = getRoleTitle(user.role).toUpperCase();
+    if (dropdownEmail) dropdownEmail.textContent = user.email || 'None';
+    if (cpEmail) cpEmail.textContent = user.email || 'None';
   }
 
   function registerActivityListeners() {
@@ -213,46 +243,45 @@ document.addEventListener('DOMContentLoaded', () => {
       roleBannerText.textContent = 'Active Role: Billing Officer. You have access to Domain & SSL expiration tracking, renewal deadlines, and billing health.';
     }
 
-    // Super Admin only tabs
+    // Check permissions from dynamic matrix (fallback to role defaults)
+    const perms = (globalRolePermissions && globalRolePermissions[role]) ? globalRolePermissions[role] : [];
+    const isSuperAdmin = (role === 'super_admin');
+
+    // UFW tab visibility
     if (tabUfwBtn) {
-      if (role === 'super_admin') {
-        tabUfwBtn.style.display = 'inline-flex';
-      } else {
-        tabUfwBtn.style.display = 'none';
-        if (activeTab === 'tab-ufw') switchTab('tab-hosts');
-      }
+      const canAccessUfw = isSuperAdmin || perms.includes('ufw');
+      tabUfwBtn.style.display = canAccessUfw ? 'inline-flex' : 'none';
+      if (!canAccessUfw && activeTab === 'tab-ufw') switchTab('tab-hosts');
     }
 
+    // Suspension settings tab visibility
     if (tabSuspensionBtn) {
-      if (role === 'super_admin') {
-        tabSuspensionBtn.style.display = 'inline-flex';
-      } else {
-        tabSuspensionBtn.style.display = 'none';
-        if (activeTab === 'tab-suspension') switchTab('tab-hosts');
-      }
+      const canAccessSusp = isSuperAdmin || perms.includes('suspension');
+      tabSuspensionBtn.style.display = canAccessSusp ? 'inline-flex' : 'none';
+      if (!canAccessSusp && activeTab === 'tab-suspension') switchTab('tab-hosts');
     }
 
+    // Team Users tab visibility (STRICTLY Super Admin Only)
     if (tabUsersBtn) {
-      tabUsersBtn.style.display = 'inline-flex';
+      tabUsersBtn.style.display = isSuperAdmin ? 'inline-flex' : 'none';
+      if (!isSuperAdmin && activeTab === 'tab-users') switchTab('tab-hosts');
     }
 
-    // Export & Import backup controls (Super Admin only)
+    // Export & Import backup controls
     const btnExportAll = document.getElementById('btn-export-all-zip');
     const btnOpenMigrate = document.getElementById('btn-open-migrate-modal');
+    const canExportImport = isSuperAdmin || perms.includes('export_import');
     if (btnExportAll) {
-      btnExportAll.style.display = (role === 'super_admin') ? 'inline-flex' : 'none';
+      btnExportAll.style.display = canExportImport ? 'inline-flex' : 'none';
     }
     if (btnOpenMigrate) {
-      btnOpenMigrate.style.display = (role === 'super_admin') ? 'inline-flex' : 'none';
+      btnOpenMigrate.style.display = canExportImport ? 'inline-flex' : 'none';
     }
 
     // Add Domain button permission
     if (btnOpenCreate) {
-      if (role === 'super_admin' || role === 'webmaster') {
-        btnOpenCreate.style.display = 'inline-flex';
-      } else {
-        btnOpenCreate.style.display = 'none';
-      }
+      const canCreate = isSuperAdmin || perms.includes('create_host');
+      btnOpenCreate.style.display = canCreate ? 'inline-flex' : 'none';
     }
   }
 
@@ -1234,8 +1263,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const USERS_PER_PAGE = 10;
 
   async function loadUsers() {
+    if (activeRole !== 'super_admin') return;
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch('/api/users', {
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403) {
+          usersData = [];
+          renderUsersTable();
+        }
+        return;
+      }
       usersData = await res.json();
       renderUsersTable();
     } catch (err) {
@@ -1297,7 +1336,7 @@ document.addEventListener('DOMContentLoaded', () => {
               </button>
               ${!isPrimaryAdmin ? `
                 <button class="${u.is_active ? 'btn-warning' : 'btn-emerald'} btn-sm" title="${u.is_active ? 'Suspend account access' : 'Reactivate account'}" onclick="suspendUserAccount(${u.id}, ${u.is_active ? 'true' : 'false'})">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
                   ${u.is_active ? 'Suspend' : 'Reactivate'}
                 </button>
                 <button class="btn-icon danger" title="Delete User" onclick="deleteUserAccount(${u.id}, '${escapeHtml(u.username)}')">
@@ -1350,7 +1389,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     try {
-      const res = await fetch(`/api/users/${id}`);
+      const res = await fetch(`/api/users/${id}`, {
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
       if (!res.ok) throw new Error('Could not fetch user details');
       const u = await res.json();
 
@@ -1399,7 +1440,10 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch(`/api/users/${editId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
@@ -1424,7 +1468,10 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch('/api/users', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
@@ -1443,7 +1490,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const actionLabel = suspend ? 'suspend' : 'reactivate';
     if (!confirm(`Are you sure you want to ${actionLabel} this user account?`)) return;
     try {
-      const res = await fetch(`/api/users/${id}/suspend?suspend=${suspend}`, { method: 'POST' });
+      const res = await fetch(`/api/users/${id}/suspend?suspend=${suspend}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || `Error updating user`);
       showToast(data.message, suspend ? 'warning' : 'success');
@@ -1456,7 +1506,10 @@ document.addEventListener('DOMContentLoaded', () => {
   window.deleteUserAccount = async function(id, username) {
     if (!confirm(`Are you sure you want to permanently delete user account @${username}?`)) return;
     try {
-      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/users/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Error deleting user');
       showToast(data.message, 'success');
@@ -2062,7 +2115,266 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Audit logs refreshed');
   });
 
+  // -----------------------------------------------------
+  // Circular Profile Widget & Change Password Modal
+  // -----------------------------------------------------
+  function setupUserProfileWidget() {
+    const btnUserProfile = document.getElementById('btn-user-profile');
+    const userProfileDropdown = document.getElementById('user-profile-dropdown');
+    const btnOpenChangePass = document.getElementById('btn-open-change-pass');
+    const changePassModal = document.getElementById('change-pass-modal');
+    const btnCloseChangePass = document.getElementById('btn-close-change-pass-modal');
+    const btnCancelChangePass = document.getElementById('btn-cancel-change-pass');
+    const changePassForm = document.getElementById('change-pass-form');
+    const btnDropdownLogout = document.getElementById('btn-dropdown-logout');
+
+    // Populate profile from stored session user if available
+    const storedUserRaw = localStorage.getItem('nova_current_user');
+    if (storedUserRaw) {
+      try {
+        const storedUser = JSON.parse(storedUserRaw);
+        updateUserProfileUI(storedUser);
+      } catch (e) {}
+    }
+
+    if (btnUserProfile && userProfileDropdown) {
+      btnUserProfile.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = userProfileDropdown.style.display === 'block';
+        userProfileDropdown.style.display = isOpen ? 'none' : 'block';
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!userProfileDropdown.contains(e.target) && !btnUserProfile.contains(e.target)) {
+          userProfileDropdown.style.display = 'none';
+        }
+      });
+    }
+
+    if (btnDropdownLogout) {
+      btnDropdownLogout.addEventListener('click', () => {
+        handleLogout(false);
+      });
+    }
+
+    if (btnOpenChangePass && changePassModal) {
+      btnOpenChangePass.addEventListener('click', () => {
+        if (userProfileDropdown) userProfileDropdown.style.display = 'none';
+        if (changePassForm) changePassForm.reset();
+        changePassModal.classList.add('open');
+      });
+    }
+
+    if (btnCloseChangePass && changePassModal) {
+      btnCloseChangePass.addEventListener('click', () => {
+        changePassModal.classList.remove('open');
+      });
+    }
+
+    if (btnCancelChangePass && changePassModal) {
+      btnCancelChangePass.addEventListener('click', () => {
+        changePassModal.classList.remove('open');
+      });
+    }
+
+    if (changePassForm) {
+      changePassForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const currentPass = document.getElementById('cp-current-password').value;
+        const newPass = document.getElementById('cp-new-password').value;
+        const confirmPass = document.getElementById('cp-confirm-password').value;
+
+        if (newPass !== confirmPass) {
+          showToast('New passwords do not match. Please verify.', 'error');
+          return;
+        }
+
+        const btnSubmit = document.getElementById('btn-submit-change-pass');
+        const origText = btnSubmit.textContent;
+        btnSubmit.disabled = true;
+        btnSubmit.textContent = 'Updating...';
+
+        try {
+          const res = await fetch('/api/auth/change-password', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${sessionToken}`
+            },
+            body: JSON.stringify({
+              current_password: currentPass,
+              new_password: newPass
+            })
+          });
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Password update failed');
+
+          showToast(data.message, 'success');
+          changePassModal.classList.remove('open');
+          changePassForm.reset();
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = origText;
+        }
+      });
+    }
+  }
+
+  // -----------------------------------------------------
+  // Fish-Eye Password Reveal / Hide Toggles
+  // -----------------------------------------------------
+  function setupPasswordEyeToggles() {
+    document.querySelectorAll('.btn-eye-toggle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const targetId = btn.getAttribute('data-target');
+        let input;
+        if (targetId) {
+          input = document.getElementById(targetId);
+        } else {
+          const wrap = btn.closest('.password-field-wrapper');
+          if (wrap) input = wrap.querySelector('input');
+        }
+        if (!input) return;
+
+        const eyeOpen = btn.querySelector('.eye-open');
+        const eyeClosed = btn.querySelector('.eye-closed');
+
+        if (input.type === 'password') {
+          input.type = 'text';
+          if (eyeOpen) eyeOpen.style.display = 'none';
+          if (eyeClosed) eyeClosed.style.display = 'inline-block';
+        } else {
+          input.type = 'password';
+          if (eyeOpen) eyeOpen.style.display = 'inline-block';
+          if (eyeClosed) eyeClosed.style.display = 'none';
+        }
+      });
+    });
+  }
+
+  // -----------------------------------------------------
+  // Role Access Features & Permissions Matrix (Super Admin Managed)
+  // -----------------------------------------------------
+  const SYSTEM_FEATURES = [
+    { id: 'hosts', name: 'Proxy Hosts View', desc: 'Browse configured reverse proxy hosts and telemetry' },
+    { id: 'create_host', name: 'Add Proxy Host', desc: 'Create new apex domain and subdomain routes' },
+    { id: 'edit_hosts', name: 'Edit Host Configurations', desc: 'Modify upstream servers, WebSocket & SSL rules' },
+    { id: 'suspend_hosts', name: 'Suspend / Unsuspend Sites', desc: 'Activate 503 maintenance mode on websites' },
+    { id: 'delete_hosts', name: 'Delete Proxy Hosts', desc: 'Remove proxy host configurations from server' },
+    { id: 'export_import', name: 'Migration & Backup', desc: 'Export and import Nginx .conf files across servers' },
+    { id: 'ufw', name: 'UFW Firewall (WAF)', desc: 'Inspect, create and delete host firewall rules' },
+    { id: 'security', name: 'WHOIS & Abuse Security', desc: 'Domain registrar lookups, abuse logs & IP blocks' },
+    { id: 'billing', name: 'Domain & SSL Expiry', desc: 'Expiration monitoring, renewal countdowns & Certbot' },
+    { id: 'suspension', name: 'Suspension Settings', desc: 'Custom 503 maintenance statement & contact details' },
+    { id: 'editor', name: 'Nginx Syntax Tester', desc: 'Live configuration syntax validator with line numbers' },
+    { id: 'logs', name: 'Audit Logs & Threats', desc: 'Administrative action logs and threat detection' }
+  ];
+
+  let globalRolePermissions = {};
+
+  async function loadRolePermissionsMatrix() {
+    try {
+      const res = await fetch('/api/roles/permissions');
+      if (!res.ok) return;
+      globalRolePermissions = await res.json();
+      renderRoleMatrixTable();
+      applyRolePermissions(activeRole);
+    } catch (err) {
+      console.warn('Could not load role permissions:', err);
+    }
+  }
+
+  function renderRoleMatrixTable() {
+    const tbody = document.getElementById('role-matrix-body');
+    if (!tbody) return;
+
+    const webmasterPerms = (globalRolePermissions.webmaster || []);
+    const securityPerms = (globalRolePermissions.security || []);
+    const billingPerms = (globalRolePermissions.billing || []);
+
+    tbody.innerHTML = SYSTEM_FEATURES.map(feat => {
+      const isWm = webmasterPerms.includes(feat.id);
+      const isSec = securityPerms.includes(feat.id);
+      const isBill = billingPerms.includes(feat.id);
+
+      return `
+        <tr>
+          <td><strong style="color: var(--text-main); font-size: 0.84rem;">${escapeHtml(feat.name)}</strong></td>
+          <td style="font-size: 0.78rem; color: var(--text-muted);">${escapeHtml(feat.desc)}</td>
+          <td style="text-align: center;">
+            <input type="checkbox" class="role-perm-chk" data-role="webmaster" data-feature="${feat.id}" ${isWm ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: var(--secondary); cursor: pointer;">
+          </td>
+          <td style="text-align: center;">
+            <input type="checkbox" class="role-perm-chk" data-role="security" data-feature="${feat.id}" ${isSec ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #f59e0b; cursor: pointer;">
+          </td>
+          <td style="text-align: center;">
+            <input type="checkbox" class="role-perm-chk" data-role="billing" data-feature="${feat.id}" ${isBill ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #a855f7; cursor: pointer;">
+          </td>
+          <td style="text-align: center;">
+            <span class="role-lock-badge" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.3); font-size: 0.7rem; padding: 0.15rem 0.45rem;">Full Rights</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  const btnSaveRoleMatrix = document.getElementById('btn-save-role-matrix');
+  if (btnSaveRoleMatrix) {
+    btnSaveRoleMatrix.addEventListener('click', async () => {
+      if (activeRole !== 'super_admin') {
+        showToast('Permission denied: Only Super Admin can modify role features', 'error');
+        return;
+      }
+
+      const roles = ['webmaster', 'security', 'billing'];
+      const updatedPerms = {
+        webmaster: [],
+        security: [],
+        billing: []
+      };
+
+      roles.forEach(r => {
+        document.querySelectorAll(`.role-perm-chk[data-role="${r}"]:checked`).forEach(chk => {
+          updatedPerms[r].push(chk.getAttribute('data-feature'));
+        });
+      });
+
+      const originalHtml = btnSaveRoleMatrix.innerHTML;
+      btnSaveRoleMatrix.disabled = true;
+      btnSaveRoleMatrix.textContent = 'Saving...';
+
+      try {
+        const res = await fetch('/api/roles/permissions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify({ permissions: updatedPerms })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to update role permissions');
+
+        globalRolePermissions = data.permissions;
+        applyRolePermissions(activeRole);
+        showToast('Role access features saved successfully!', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        btnSaveRoleMatrix.disabled = false;
+        btnSaveRoleMatrix.innerHTML = originalHtml;
+      }
+    });
+  }
+
   // Initial loads & telemetry intervals
+  setupUserProfileWidget();
+  setupPasswordEyeToggles();
+  loadRolePermissionsMatrix();
   loadHosts();
   loadSystemMetrics();
 

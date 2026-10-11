@@ -1548,3 +1548,252 @@ pre#config-modal-code,
   flex-wrap: nowrap;
 }
 
+/* -------------------------------------------------------------
+   Circular Profile Button & Dropdown Menu
+   ------------------------------------------------------------- */
+.user-profile-widget {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.circular-profile-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  border: 2px solid rgba(56, 189, 248, 0.4);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.28);
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.circular-profile-btn:hover {
+  transform: translateY(-1px);
+  border-color: #38bdf8;
+  box-shadow: 0 6px 16px rgba(2, 132, 199, 0.45);
+}
+
+.avatar-initials {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.avatar-status-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-emerald);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+}
+
+.profile-dropdown-card {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 290px;
+  background: rgba(15, 23, 42, 0.98);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(56, 189, 248, 0.1);
+  z-index: 1200;
+  overflow: hidden;
+  animation: dropdownFadeIn 0.18s ease-out;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.profile-dropdown-header {
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: rgba(2, 132, 199, 0.05);
+}
+
+.profile-dropdown-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  border: 2px solid rgba(56, 189, 248, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.92rem;
+  flex-shrink: 0;
+}
+
+.profile-dropdown-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.profile-fullname {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-username {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-top: 0.1rem;
+}
+
+.profile-role-badge {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 5px;
+  background: rgba(2, 132, 199, 0.16);
+  color: var(--secondary);
+  border: 1px solid rgba(2, 132, 199, 0.25);
+}
+
+.profile-dropdown-meta {
+  padding: 0.9rem 1.15rem;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.profile-meta-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.profile-meta-val {
+  font-size: 0.82rem;
+  color: var(--text-main);
+  font-weight: 600;
+  word-break: break-all;
+  margin-top: 0.25rem;
+}
+
+.profile-email-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  margin-top: 0.45rem;
+  line-height: 1.35;
+}
+
+.profile-dropdown-actions {
+  padding: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.profile-action-btn {
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  text-align: left;
+}
+
+.profile-action-btn:hover {
+  background: rgba(2, 132, 199, 0.12);
+  color: var(--secondary);
+}
+
+.profile-action-btn.btn-danger-action {
+  color: #f87171;
+}
+
+.profile-action-btn.btn-danger-action:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+/* -------------------------------------------------------------
+   Password Field Wrapper & Fish-Eye Reveal
+   ------------------------------------------------------------- */
+.password-field-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.password-field-wrapper input {
+  padding-right: 2.75rem !important;
+}
+
+.btn-eye-toggle {
+  position: absolute;
+  right: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.btn-eye-toggle:hover {
+  color: var(--secondary);
+  background: rgba(2, 132, 199, 0.12);
+}
+
+.btn-eye-toggle svg {
+  display: block;
+}
+

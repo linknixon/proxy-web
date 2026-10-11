@@ -1,65 +1,134 @@
 # Nova Proxy Admin
 
-Centralized high-performance management console for Nginx reverse proxies, Host & UFW Firewall (WAF) rule administration, SSL automation, domain lifecycle tracking, and multi-role operations.
+Centralized high-performance management console for Nginx reverse proxies, Host & UFW Firewall (WAF) rule administration, SSL certificate automation, domain lifecycle tracking, and multi-role edge operations.
 
 Maintained by **[Nova Cloud Edges](https://ncloud.co.ug)**  
 Contact us: Email: `support@sun.ac.ug` | Tel: `+256790 00031`
 
 ---
 
+## Architecture & System Overview
+
+Nova Proxy Admin provides a secure web console and RESTful API for administering server-level edge proxies and system networking. It interacts directly with host-native engines (**Nginx**, **UFW**, **Certbot**, **psutil**) while persisting only lightweight state, user identities, and role assignments in MySQL/MariaDB.
+
+```
+       +-------------------------------------------------------------+
+       |               Nova Proxy Admin Console (Web UI)             |
+       |  Vanilla HTML5 / CSS3 Dark Theme / SVG Icons / Clean JS    |
+       +------------------------------+------------------------------+
+                                      | HTTP / REST API (Port 8000)
+                                      v
+       +-------------------------------------------------------------+
+       |                    FastAPI Backend (app.py)                 |
+       |  Token Auth (10m Inactivity) | RBAC Permissions | SMTP Alerts|
+       +-------+------------------+------------------+---------------+
+               |                  |                  |               |
+               v                  v                  v               v
+      +-----------------+  +--------------+  +---------------+  +------------+
+      | Nginx Engine    |  | Host UFW WAF |  | Certbot SSL   |  | MySQL /    |
+      | /etc/nginx/     |  | Packet Rules |  | Let's Encrypt |  | MariaDB    |
+      | .conf configs   |  | IPv4 & IPv6  |  | Auto-Renew    |  | Minimal DB |
+      +-----------------+  +--------------+  +---------------+  +------------+
+```
+
+---
+
 ## Key Features & Capabilities
 
-- **Primary Apex Domains & Subdomains with Application Labeling**:
-  - Full support for primary apex domains (`example.com`, `sun.ac.ug`) and subdomains (`app.example.com`, `api.sun.ac.ug`).
-  - Customizable **Application Name / Service Label** for each proxy host (e.g., University Portal, ERP Backend, API Gateway).
-  - Reverse proxy upstream mapping with WebSocket upgrade headers, exploit blocking, and SSL enforcement.
+### 1. Reverse Proxy & Upstream Routing
+- **Apex Domains & Subdomains**: Full routing support for primary apex domains (`example.com`, `sun.ac.ug`) and subdomains (`portal.example.com`, `api.sun.ac.ug`).
+- **Application Labeling**: Assign friendly service labels to each virtual host (e.g., *Core ERP*, *Student Portal*, *API Gateway*).
+- **Production Directives**: Automated WebSocket upgrade headers (`Upgrade`, `Connection`), HTTP/1.1 keep-alives, SSL redirection, and exploit path blocking.
 
-- **Host Machine & UFW Firewall (WAF) Management**:
-  - Live system-synchronized firewall rule management (`ufw` CLI host engine integration).
-  - Comprehensive IP filtering supporting both **IPv4** (`192.168.1.0/24`, `10.0.0.1`) and **IPv6** (`2001:db8::/32`, `2001:db8::1`, `::/0`, `Anywhere`).
-  - Action types: `ALLOW`, `DENY`, and `LIMIT` (brute-force rate limiting) across ports 80, 443, 22, 3306, and custom ports.
+### 2. Nginx Syntax Debugger with Line Numbers
+- **Precise Error Diagnostics**: When testing or deploying configurations, syntax validation issues explicitly report line numbers:
+  - `Line X: Directive missing terminating semicolon ';'`
+  - `Line X: Unclosed block directive — opening brace '{' is never closed`
+  - `Line X: Unexpected closing brace '}' with no matching open block`
+  - `Line X: Unclosed quote (single or double) in directive`
+- **Native `nginx -t` Parser**: Runs real-time syntax checking against the host `nginx` binary and translates compiler line outputs directly into actionable line alerts.
 
-- **Security & Deployment Audit Trail with Traffic Anomaly Detection**:
-  - Real-time logging of administrative actions, proxy deployments, and firewall changes.
-  - Automated **Abnormal Traffic & Anomaly Threat Detection**: identifies exploit probing signatures (`.env`, `wp-login`, SQLi, path traversal), brute-force spikes, authentication violations, and high-frequency client request bursts.
-  - **Access & Request Distribution by Client IP**: displays top 6 client IPs with live distribution percentages.
+### 3. Role-Based Access Control (RBAC) & Permissions Matrix
+- **Configurable Role Rights**: Super Admin can dynamically configure feature permissions for each system role (`webmaster`, `security`, `billing`).
+- **Webmaster Isolation**: Webmasters are strictly restricted from viewing, modifying, or deleting team user accounts. Team management is locked to Super Admin.
+- **Dynamic Feature Matrix**: Super Admin can customize which roles have access to proxy host management, creation, editing, site suspensions, firewall rules, abuse monitoring, billing timelines, and configuration migration.
 
-- **Managed Action Email Notifications (SMTP)**:
-  - Configurable outgoing SMTP server integration (`mail.ncloud.co.ug`, custom SMTP servers with STARTTLS, SSL, or plain auth).
-  - Automated email broadcast triggers for:
-    1. UFW rule add, edit, status toggle, and deletion.
-    2. Domain abuse reports and automated IP drop rules.
-    3. Impending SSL certificate expirations (<15 days) and renewals.
-    4. Domain registration expiration deadlines (<30 days).
-    5. Website suspensions and reactivations.
-  - Test alert dispatch endpoint to verify outgoing mail server connectivity.
+### 4. User Profile, Security & Fish-Eye Password Reveals
+- **Circular Profile Widget**: Top-right corner circular avatar displaying user initials and online status dot.
+- **Self-Service Password Updates**: Any logged-in user can update their password via their profile popup with real-time password strength validation.
+- **Immutable User Emails**: Registered email addresses are displayed read-only on profiles to prevent account hijacking; only Super Admin can alter user email addresses.
+- **Fish-Eye Password Reveals**: Interactive eye toggle button on all password fields (login form, password recovery form, change password modal, and user creation form) to reveal or conceal passwords securely.
 
-- **Domain & SSL Expiration Timelines**:
-  - Unified timeline tracking both **SSL Certificate expiration** and **Domain Registration expiration**.
-  - Days-remaining countdown with health badges (`Healthy (>30d)`, `Expiring Soon`, `Urgent (<15d)`).
-  - One-click renewal integration via Certbot.
+### 5. Automated Password Recovery via SMTP
+- **Email Verification**: Forgot password requests dispatch a cryptographically secure temporary password directly to the user's registered email address.
+- **Strict Blacklist**: Password policy enforces minimum 8 characters with mixed casing, digits, and rejects common dictionary passwords (`123456`, `password`, `admin`, etc.).
 
-- **Authentication, Sessions & Security**:
-  - Strict authentication with token-based sessions and automated **10-minute inactivity logout**.
-  - No public registration; administrative user provisioning with role-based access control (`super_admin`, `webmaster`, `security`, `billing`).
-  - Forgot password recovery flow with strict blacklist blocking common and easily guessed passwords (`password`, `123456`, `admin`, common roots).
+### 6. Host UFW Firewall & WAF Engine
+- **Direct System Synchronization**: Live inspection and management of system packet filter rules (`ufw` engine).
+- **Dual-Stack Support**: Native support for **IPv4** (`192.168.1.0/24`, `10.0.0.1`) and **IPv6** (`2001:db8::/32`, `2001:db8::1`, `::/0`, `Anywhere`).
+- **Rule Actions**: Support for `ALLOW`, `DENY`, and `LIMIT` (brute-force rate limiting).
 
-- **Nginx Server Migration & Configuration Backup**:
-  - Full archive backup of all active server blocks as a `.conf` ZIP package.
-  - Per-site `.conf` export and drag-and-drop import for migrating websites across servers.
+### 7. Managed Action Email Notifications (SMTP)
+- Automated alerts dispatched over outgoing SMTP (`mail.ncloud.co.ug` / custom SMTP with STARTTLS or SSL on port 587 or 465) for:
+  - Firewall rule modifications and port updates
+  - Domain abuse detections and automated IP drop rules
+  - Impending SSL certificate expirations (<15 days)
+  - Impending domain registration expirations (<30 days)
+  - Website maintenance suspensions and reactivations
+- **Live SMTP Diagnostics**: Integrated interactive test dispatch endpoint with real-time socket and authentication error surfacing.
 
----
-
-## Tech Stack
-
-- **Backend**: FastAPI, Python 3.12, SQLAlchemy, PyMySQL, Pydantic, psutil
-- **Database**: MySQL / MariaDB (stored minimal configuration items)
-- **Web Server / Proxy**: Nginx, Certbot (Let's Encrypt), systemd, UFW
-- **Frontend**: Vanilla HTML5, CSS3 with dark/light themes, pure SVG icons (zero emoji policy), and vanilla JavaScript
+### 8. Nginx Migration & Full Configuration Archival
+- **Full ZIP Export**: Download all active virtual host configurations as a single `.conf` archive.
+- **Per-Site Export & Import**: Export individual site `.conf` files and import existing Nginx files with automatic extraction of `server_name`, upstream `proxy_pass`, WebSocket headers, and SSL certificates.
 
 ---
 
-## Installation & Deployment
+## Prerequisites & Dependencies
+
+### System Packages (Debian / Ubuntu Linux)
+
+Ensure your server has Python 3.10+, Nginx, UFW, Certbot, and MySQL/MariaDB installed:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  nginx \
+  certbot \
+  python3-certbot-nginx \
+  ufw \
+  mysql-server \
+  python3-venv \
+  python3-pip \
+  python3-dev \
+  curl \
+  git
+```
+
+Enable and start fundamental services:
+```bash
+sudo systemctl enable nginx ufw mysql
+sudo systemctl start nginx mysql
+sudo ufw enable
+```
+
+### Python Libraries
+
+The application uses the following Python packages:
+
+| Library | Version Requirement | Purpose |
+| :--- | :--- | :--- |
+| `fastapi` | `>=0.110.0` | High-performance asynchronous REST API framework |
+| `uvicorn` | `>=0.29.0` | Production ASGI web server |
+| `sqlalchemy` | `>=2.0.0` | ORM & database connectivity |
+| `pymysql` | `>=1.1.0` | Pure-Python MySQL client driver |
+| `pydantic` | `>=2.6.0` | Strict request validation & data parsing |
+| `psutil` | `>=5.9.0` | Hardware CPU, RAM, disk, & network telemetry |
+| `cryptography` | `>=42.0.0` | Cryptographic functions & SSL certificate parsing |
+| `python-multipart`| `>=0.0.9` | Multipart form & file upload handling |
+
+---
+
+## Installation & Quickstart
 
 ### 1. Clone the Repository
 ```bash
@@ -67,40 +136,74 @@ git clone https://github.com/linknixon/proxy-web.git /opt/proxy-dashboard
 cd /opt/proxy-dashboard
 ```
 
-### 2. Set Up Python Virtual Environment & Dependencies
+### 2. Configure Python Virtual Environment & Install Dependencies
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn sqlalchemy pymysql pydantic psutil cryptography
+pip install --upgrade pip
+pip install \
+  fastapi \
+  uvicorn \
+  sqlalchemy \
+  pymysql \
+  pydantic \
+  psutil \
+  cryptography \
+  python-multipart
 ```
 
-### 3. Configure Database
+### 3. Initialize MySQL Database
+Log into MySQL:
+```bash
+sudo mysql
+```
+
+Execute SQL initialization:
 ```sql
-CREATE DATABASE proxy_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'proxy_user'@'localhost' IDENTIFIED BY 'your_password';
+CREATE DATABASE IF NOT EXISTS proxy_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'proxy_user'@'localhost' IDENTIFIED BY 'YourStrongPassword2026!';
 GRANT ALL PRIVILEGES ON proxy_manager.* TO 'proxy_user'@'localhost';
 FLUSH PRIVILEGES;
+EXIT;
 ```
 
-Update your database credentials in `app.py` or `.env`.
+Set environment variables or update database credentials in `app.py`:
+```bash
+export DB_USER="proxy_user"
+export DB_PASS="YourStrongPassword2026!"
+export DB_HOST="127.0.0.1"
+export DB_PORT="3306"
+export DB_NAME="proxy_manager"
+```
 
-### 4. Run Locally / Development Server
+### 4. Run Development Server
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 5. Production systemd Service
-Create `/etc/systemd/system/proxy-dashboard.service`:
+---
+
+## Production Deployment with systemd
+
+To run the console continuously as a background service managed by Linux `systemd`:
+
+1. Create `/etc/systemd/system/proxy-dashboard.service`:
 ```ini
 [Unit]
-Description=Nova Proxy Admin Console
+Description=Nova Proxy Admin Console Service
 After=network.target nginx.service mysql.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/proxy-dashboard
-ExecStart=/opt/proxy-dashboard/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+Environment=PYTHONUNBUFFERED=1
+Environment=DB_USER=proxy_user
+Environment=DB_PASS=YourStrongPassword2026!
+Environment=DB_HOST=127.0.0.1
+Environment=DB_PORT=3306
+Environment=DB_NAME=proxy_manager
+ExecStart=/opt/proxy-dashboard/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=always
 RestartSec=3
 
@@ -108,20 +211,83 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-Reload and start:
+2. Reload daemon and start service:
 ```bash
-systemctl daemon-reload
-systemctl enable proxy-dashboard
-systemctl start proxy-dashboard
+sudo systemctl daemon-reload
+sudo systemctl enable proxy-dashboard
+sudo systemctl start proxy-dashboard
+sudo systemctl status proxy-dashboard
 ```
 
 ---
 
-## Git Operations
+## Production Nginx Reverse Proxy Setup
 
-To stage changes, commit, and push to GitHub:
+Proxy external traffic arriving at `proxy.novacloudedges.com` or your IP to the local Uvicorn instance:
+
+```nginx
+server {
+    listen 80;
+    server_name proxy.novacloudedges.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Secure with Certbot:
+```bash
+sudo certbot --nginx -d proxy.novacloudedges.com --non-interactive --agree-tos -m admin@novacloudedges.com
+```
+
+---
+
+## Roles & Default Permissions
+
+| Role | Default Features | Restrictions |
+| :--- | :--- | :--- |
+| **Super Admin** | Full access to all modules, users, firewall, migration, and role permissions | Cannot be deleted or suspended |
+| **Webmaster** | View proxy hosts, create new domains, Nginx syntax tester | Cannot manage team users; cannot edit, delete, or suspend existing domains unless granted |
+| **Security Analyst** | WHOIS intelligence, SSL certificate inspector, domain abuse logs, audit trail | Read-only access to host routes; cannot modify firewall rules without permission |
+| **Billing Officer** | Domain and SSL expiration timelines, renewal deadlines, Certbot renewal actions | Restricted from host creation and firewall modification |
+
+---
+
+## Troubleshooting & Debugging
+
+- **Nginx Syntax Checking**:
+  Run `/api/validate-nginx` or use the **Nginx Syntax Tester** tab to inspect configurations. All errors output exact line numbers:
+  ```
+  Line 14: Directive missing terminating semicolon ';': 'proxy_pass http://127.0.0.1:8080'
+  ```
+- **SMTP Alerts Failing**:
+  Ensure port 587 (STARTTLS) or 465 (SSL) is open in your server firewall:
+  ```bash
+  sudo ufw allow out 587/tcp
+  ```
+  Use the **Test SMTP Alert** button in the console to verify credentials.
+- **Log Review**:
+  ```bash
+  journalctl -u proxy-dashboard -f
+  ```
+
+---
+
+## Git Operations & Pushing Changes
+
+To push all updates to GitHub:
 ```bash
 git add .
-git commit -m "Nova Proxy Admin - Enhanced security, IPv6 WAF, SMTP alerts, and domain management"
+git commit -m "Nova Proxy Admin - Enhanced security, role matrix, password reveal, and email recovery"
 git push -u origin main
 ```

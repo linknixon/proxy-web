@@ -11,10 +11,12 @@ import smtplib
 import ipaddress
 import secrets
 import hashlib
+import shutil
+import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from collections import deque
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Depends, Query, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -231,7 +233,14 @@ class LoginRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     identity: str
+    new_password: Optional[str] = None
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
     new_password: str
+
+class RolePermissionsUpdate(BaseModel):
+    permissions: Dict[str, List[str]]
 
 class SmtpSettingsUpdate(BaseModel):
     smtp_host: Optional[str] = None
@@ -479,6 +488,7 @@ def create_session(user: User) -> str:
         "username": user.username,
         "role": user.role,
         "full_name": user.full_name,
+        "email": user.email,
         "last_active": datetime.datetime.utcnow()
     }
     return token
@@ -505,7 +515,7 @@ def get_session_user(req: Request) -> Optional[dict]:
     sess["last_active"] = now
     return sess
 
-def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: Session):
+def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: Session, override_recipient: Optional[str] = None, raise_on_error: bool = False):
     """
     Sends automated email notifications via configured SMTP server for:
     - ufw: UFW rule modifications
@@ -513,12 +523,15 @@ def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: 
     - ssl: SSL certificate expirations (<15d)
     - domain: Domain registration renewals
     - suspension: Domain suspension/reactivations
+    - test: Interactive SMTP test emails
+    - recovery: Password recovery credentials
     """
     try:
-        # Check if trigger is enabled in settings
-        trigger_active = get_setting(db, f"smtp_trigger_{trigger_type}", "1")
-        if trigger_active not in ["1", "true", "True"]:
-            return
+        # Check if trigger is enabled in settings (bypassed for test and recovery requests)
+        if trigger_type not in ["test", "recovery"]:
+            trigger_active = get_setting(db, f"smtp_trigger_{trigger_type}", "1")
+            if trigger_active not in ["1", "true", "True"]:
+                return
 
         smtp_host = get_setting(db, "smtp_host", "mail.ncloud.co.ug")
         smtp_port = int(get_setting(db, "smtp_port", "587"))
@@ -527,11 +540,19 @@ def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: 
         smtp_to = get_setting(db, "smtp_to_emails", "admin@novacloudedges.com")
         smtp_encryption = get_setting(db, "smtp_encryption", "starttls")
 
-        if not smtp_host or not smtp_to:
+        if not smtp_host:
+            if raise_on_error:
+                raise ValueError("SMTP host is not configured.")
             return
 
-        recipients = [e.strip() for e in smtp_to.split(",") if e.strip()]
+        if override_recipient:
+            recipients = [e.strip() for e in override_recipient.split(",") if e.strip()]
+        else:
+            recipients = [e.strip() for e in smtp_to.split(",") if e.strip()]
+
         if not recipients:
+            if raise_on_error:
+                raise ValueError("No recipient email address specified.")
             return
 
         msg = MIMEMultipart("alternative")
@@ -557,9 +578,9 @@ def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: 
         msg.attach(MIMEText(html_body, "html"))
 
         if smtp_encryption == "ssl":
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=8)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
         else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=8)
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
             if smtp_encryption == "starttls":
                 server.starttls()
 
@@ -569,7 +590,9 @@ def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: 
         server.sendmail(smtp_user, recipients, msg.as_string())
         server.quit()
     except Exception as e:
-        print(f"Notice: SMTP notification background dispatch: {e}")
+        print(f"Notice: SMTP notification dispatch: {e}")
+        if raise_on_error:
+            raise e
 
 def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     """Generates production-grade Nginx server configuration blocks with custom suspension page."""
@@ -813,6 +836,15 @@ def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
     sess = get_session_user(req)
     if not sess:
         raise HTTPException(status_code=401, detail="Session expired or invalid. Please sign in.")
+    
+    # Query database for fresh user profile
+    user = db.query(User).filter(User.id == sess["user_id"]).first()
+    if user:
+        sess["email"] = user.email
+        sess["full_name"] = user.full_name
+        sess["role"] = user.role
+        sess["is_active"] = user.is_active
+
     return {"user": sess, "active": True}
 
 @app.post("/api/auth/logout")
@@ -824,13 +856,19 @@ def logout(req: Request):
         del ACTIVE_SESSIONS[token]
     return {"message": "Signed out successfully."}
 
-@app.post("/api/auth/forgot-password")
-def forgot_password(data: ForgotPasswordRequest, req: Request, db: Session = Depends(get_db)):
-    """Reset user password, enforcing non-common password restrictions."""
-    identity = data.identity.strip().lower()
-    user = db.query(User).filter((User.username == identity) | (User.email == identity)).first()
+@app.post("/api/auth/change-password")
+def change_user_password(data: ChangePasswordRequest, req: Request, db: Session = Depends(get_db)):
+    """Allows any logged-in user to change their account password from their profile."""
+    sess = get_session_user(req)
+    if not sess:
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
+
+    user = db.query(User).filter(User.id == sess["user_id"]).first()
     if not user:
-        raise HTTPException(status_code=404, detail="No registered account found with that username or email.")
+        raise HTTPException(status_code=404, detail="User account not found.")
+
+    if not verify_password(data.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password entered is incorrect.")
 
     validate_password_strength(data.new_password)
     user.password_hash = hash_password(data.new_password)
@@ -838,22 +876,140 @@ def forgot_password(data: ForgotPasswordRequest, req: Request, db: Session = Dep
 
     client_ip = req.client.host if req.client else "127.0.0.1"
     audit = AuditLog(
-        action="PASSWORD_RESET",
-        details=f"Password was reset for account @{user.username} via forgot-password recovery.",
+        action="USER_PASSWORD_CHANGE",
+        details=f"User @{user.username} successfully updated their password via account profile.",
         status="success",
         client_ip=client_ip
     )
     db.add(audit)
     db.commit()
 
-    return {"message": f"Password for @{user.username} has been reset successfully."}
+    return {"message": "Your password has been changed successfully."}
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, req: Request, db: Session = Depends(get_db)):
+    """Generates a secure temporary password and dispatches it via SMTP to the registered email address."""
+    identity = data.identity.strip().lower()
+    user = db.query(User).filter((User.username == identity) | (User.email == identity)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered account found with that username or email address.")
+
+    if not user.email:
+        raise HTTPException(status_code=400, detail="This account has no registered email address. Please contact Super Admin.")
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is suspended. Please contact Super Admin.")
+
+    # Generate secure temporary password
+    temp_pass = f"NovaTemp-{secrets.token_urlsafe(6)}!9"
+    user.password_hash = hash_password(temp_pass)
+    db.commit()
+
+    # Dispatch temporary password via configured SMTP
+    subject = "Nova Proxy Admin — Account Recovery Credentials"
+    body_text = f"""Hello {user.full_name},
+
+A password recovery request was initiated for your Nova Proxy Admin account (@{user.username}).
+
+Your new temporary login password is:
+{temp_pass}
+
+Please sign in at your Nova Proxy dashboard console and immediately update your password from your account profile in the top-right corner.
+
+Notice: Your email address ({user.email}) is permanently managed by Super Admin and cannot be modified from profile settings.
+"""
+    try:
+        send_smtp_notification(
+            trigger_type="recovery",
+            subject=subject,
+            body_text=body_text,
+            db=db,
+            override_recipient=user.email,
+            raise_on_error=True
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to dispatch recovery email to {user.email}: {str(e)}")
+
+    client_ip = req.client.host if req.client else "127.0.0.1"
+    audit = AuditLog(
+        action="PASSWORD_RECOVERY_EMAIL",
+        details=f"Dispatched temporary recovery credentials to {user.email} for account @{user.username}",
+        status="success",
+        client_ip=client_ip
+    )
+    db.add(audit)
+    db.commit()
+
+    return {
+        "message": f"Temporary access credentials have been securely dispatched to your registered email ({user.email}). Check your inbox and spam folder."
+    }
 
 # ---------------------------------------------------------
-# Users & Roles (RBAC)
+# Role Features & Permissions Matrix (Super Admin Managed)
+# ---------------------------------------------------------
+DEFAULT_ROLE_PERMS = {
+    "super_admin": [
+        "hosts", "create_host", "edit_hosts", "suspend_hosts", "delete_hosts",
+        "export_import", "ufw", "security", "billing", "suspension",
+        "editor", "logs", "users", "roles"
+    ],
+    "webmaster": [
+        "hosts", "create_host", "editor"
+    ],
+    "security": [
+        "security", "logs"
+    ],
+    "billing": [
+        "billing"
+    ]
+}
+
+@app.get("/api/roles/permissions")
+def get_role_permissions(db: Session = Depends(get_db)):
+    """Returns matrix of allowed features and permissions for each role."""
+    raw = get_setting(db, "role_permissions", "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return DEFAULT_ROLE_PERMS
+
+@app.post("/api/roles/permissions")
+def update_role_permissions(payload: RolePermissionsUpdate, req: Request, db: Session = Depends(get_db)):
+    """Allows Super Admin to customize feature permissions per role."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can modify role feature permissions.")
+
+    perms = payload.permissions
+    # Super admin must always retain full rights
+    perms["super_admin"] = DEFAULT_ROLE_PERMS["super_admin"]
+
+    set_setting(db, "role_permissions", json.dumps(perms))
+
+    client_ip = req.client.host if req.client else "127.0.0.1"
+    audit = AuditLog(
+        action="ROLE_PERMISSIONS_UPDATE",
+        details="Super Admin updated role access permissions matrix.",
+        status="success",
+        client_ip=client_ip
+    )
+    db.add(audit)
+    db.commit()
+
+    return {"message": "Role access feature permissions saved successfully.", "permissions": perms}
+
+# ---------------------------------------------------------
+# Users & Roles (RBAC - Super Admin Only)
 # ---------------------------------------------------------
 @app.get("/api/users")
-def list_users(db: Session = Depends(get_db)):
-    """List all team accounts and roles."""
+def list_users(req: Request, db: Session = Depends(get_db)):
+    """List all team accounts and roles (Super Admin Only)."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can view and manage team members.")
+
     users = db.query(User).order_by(User.id.asc()).all()
     return [
         {
@@ -871,6 +1027,10 @@ def list_users(db: Session = Depends(get_db)):
 @app.post("/api/users")
 def create_user(data: UserCreate, req: Request, db: Session = Depends(get_db)):
     """Allows Super Admin to add team members with assigned roles."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can create team accounts.")
+
     clean_username = data.username.strip().lower()
     clean_email = data.email.strip().lower()
 
@@ -931,7 +1091,11 @@ def get_user_detail(user_id: int, db: Session = Depends(get_db)):
 
 @app.put("/api/users/{user_id}")
 def update_user(user_id: int, data: UserUpdate, req: Request, db: Session = Depends(get_db)):
-    """Edit user details: full_name, email, role, optional password."""
+    """Edit user details: full_name, email, role, optional password (Super Admin Only)."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can modify team accounts.")
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -974,7 +1138,11 @@ def update_user(user_id: int, data: UserUpdate, req: Request, db: Session = Depe
 
 @app.post("/api/users/{user_id}/suspend")
 def suspend_user(user_id: int, req: Request, suspend: bool = Query(True), db: Session = Depends(get_db)):
-    """Suspend or unsuspend a team user account."""
+    """Suspend or unsuspend a team user account (Super Admin Only)."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can suspend accounts.")
+
     if user_id == 1 and suspend:
         raise HTTPException(status_code=400, detail="Cannot suspend the primary Super Admin account.")
 
@@ -1004,7 +1172,11 @@ def suspend_user(user_id: int, req: Request, suspend: bool = Query(True), db: Se
 
 @app.post("/api/users/{user_id}/toggle")
 def toggle_user_active(user_id: int, req: Request, db: Session = Depends(get_db)):
-    """Toggle user active/inactive status."""
+    """Toggle user active/inactive status (Super Admin Only)."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can toggle account status.")
+
     if user_id == 1:
         raise HTTPException(status_code=400, detail="Cannot disable primary Super Admin account.")
 
@@ -1029,7 +1201,11 @@ def toggle_user_active(user_id: int, req: Request, db: Session = Depends(get_db)
 
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: int, req: Request, db: Session = Depends(get_db)):
-    """Delete team user account."""
+    """Delete team user account (Super Admin Only)."""
+    sess = get_session_user(req)
+    if sess and sess.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Permission denied: Only Super Admin can delete team accounts.")
+
     if user_id == 1:
         raise HTTPException(status_code=400, detail="Cannot delete primary Super Admin account.")
 
@@ -1592,27 +1768,88 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
 
 @app.post("/api/validate-nginx")
 def validate_nginx_config(payload: NginxValidationRequest):
+    """
+    Validates Nginx configuration syntax with precise line numbers for debugging:
+    - Missing semicolons
+    - Unbalanced/unclosed braces
+    - Unmatched quote strings
+    - Real-time nginx -t test parser if nginx binary is present on the host
+    """
     lines = payload.config_text.splitlines()
-    open_braces = 0
     errors = []
+    brace_stack = []
 
     for idx, raw_line in enumerate(lines, 1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
-        open_braces += line.count("{") - line.count("}")
+        # Check for unclosed single or double quotes
+        # ignore escaped quotes
+        clean_quotes = re.sub(r'\\.', '', line)
+        if clean_quotes.count('"') % 2 != 0:
+            errors.append(f"Line {idx}: Unclosed double quote (\") in directive: '{line}'")
+        elif clean_quotes.count("'") % 2 != 0:
+            errors.append(f"Line {idx}: Unclosed single quote (') in directive: '{line}'")
 
+        # Track brace hierarchy with line numbers
+        for char in line:
+            if char == "{":
+                brace_stack.append(idx)
+            elif char == "}":
+                if brace_stack:
+                    brace_stack.pop()
+                else:
+                    errors.append(f"Line {idx}: Unexpected closing brace '}}' with no matching open block.")
+
+        # Semicolon validation on directives
         if not line.endswith("{") and not line.endswith("}") and not line.endswith(";"):
             errors.append(f"Line {idx}: Directive missing terminating semicolon ';': '{line}'")
 
-    if open_braces != 0:
-        errors.append(f"Unbalanced braces in configuration: count mismatch ({open_braces})")
+    for open_line in brace_stack:
+        errors.append(f"Line {open_line}: Unclosed block directive — opening brace '{{' is never closed.")
+
+    # If static check passes, run real nginx -t if nginx is installed on host
+    nginx_bin = shutil.which("nginx")
+    if nginx_bin and not errors:
+        tf_path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as tf:
+                tf.write(payload.config_text)
+                tf_path = tf.name
+            
+            proc = subprocess.run([nginx_bin, "-t", "-c", tf_path], capture_output=True, text=True, timeout=6)
+            if proc.returncode != 0:
+                raw_out = (proc.stderr or "") + "\n" + (proc.stdout or "")
+                for raw_l in raw_out.splitlines():
+                    clean_l = raw_l.strip()
+                    if not clean_l or "test is successful" in clean_l:
+                        continue
+                    m = re.search(r"in\s+[^\s:]+:(\d+)", clean_l)
+                    if m:
+                        line_no = m.group(1)
+                        # Extract clean error message
+                        msg_clean = clean_l
+                        if "[emerg]" in clean_l:
+                            msg_clean = clean_l.split("[emerg]")[-1].strip()
+                        errors.append(f"Line {line_no}: [emerg] {msg_clean}")
+                    elif "[emerg]" in clean_l:
+                        errors.append(f"Syntax Error: {clean_l.split('[emerg]')[-1].strip()}")
+                    elif clean_l.startswith("nginx:"):
+                        errors.append(clean_l)
+        except Exception as e:
+            pass
+        finally:
+            if tf_path and os.path.exists(tf_path):
+                try:
+                    os.unlink(tf_path)
+                except Exception:
+                    pass
 
     if errors:
         return {
             "valid": False,
-            "message": "Nginx configuration syntax check failed",
+            "message": f"Nginx configuration syntax check failed with {len(errors)} error(s)",
             "errors": errors
         }
 
@@ -2031,13 +2268,20 @@ def update_smtp_settings(data: SmtpSettingsUpdate, req: Request, db: Session = D
 
 @app.post("/api/smtp/test")
 def test_smtp_configuration(data: TestEmailRequest, req: Request, db: Session = Depends(get_db)):
-    target_email = data.test_email.strip() if data.test_email else get_setting(db, "smtp_to_emails", "admin@novacloudedges.com")
+    target_email = data.test_email.strip() if (data.test_email and data.test_email.strip()) else ""
+    if not target_email and data.recipient:
+        target_email = data.recipient.strip()
+    if not target_email:
+        target_email = get_setting(db, "smtp_to_emails", "admin@novacloudedges.com")
+
     try:
         send_smtp_notification(
             trigger_type="test",
             subject="Nova Edge Proxy — SMTP Notification Test",
-            body_text=f"This is an operational test email notification from Nova Cloud Edges Proxy Admin.\nManaged action SMTP alerts are configured and functional.\nRecipient: {target_email}",
-            db=db
+            body_text=f"This is an operational test email notification from Nova Cloud Edges Proxy Admin.\nManaged action SMTP alerts are configured and functional.\nTarget Recipient: {target_email}",
+            db=db,
+            override_recipient=target_email,
+            raise_on_error=True
         )
         return {"message": f"Test alert email dispatched successfully to {target_email}"}
     except Exception as e:
