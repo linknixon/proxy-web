@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — Nova Cloud Edges Proxy Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-body: #0b1120;
+      --bg-card: #0f172a;
+      --border-card: #1e293b;
+      --text-head: #f8fafc;
+      --text-sub: #94a3b8;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #38bdf8;
+      --emerald: #10b981;
+      --danger: #ef4444;
+      --font-primary: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: var(--font-primary);
+      background: radial-gradient(circle at 50% 15%, #1e293b 0%, #0b1120 100%);
+      color: var(--text-head);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .login-container {
+      width: 100%;
+      max-width: 440px;
+      margin: auto;
+    }
+    .login-card {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--border-card);
+      border-radius: 20px;
+      padding: 2.5rem 2.25rem;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(56, 189, 248, 0.1);
+      backdrop-filter: blur(16px);
+      position: relative;
+      overflow: hidden;
+    }
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #0284c7, #38bdf8, #10b981);
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 1.75rem;
+    }
+    .login-logo-wrap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+    }
+    .login-logo {
+      height: 64px;
+      width: auto;
+      object-fit: contain;
+      filter: drop-shadow(0 4px 12px rgba(2, 132, 199, 0.35));
+    }
+    .login-title {
+      font-size: 1.45rem;
+      font-weight: 800;
+      color: var(--text-head);
+      letter-spacing: -0.02em;
+      margin-bottom: 0.35rem;
+    }
+    .login-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-sub);
+      line-height: 1.45;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    .form-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text-head);
+      margin-bottom: 0.45rem;
+    }
+    .form-label a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.78rem;
+    }
+    .form-label a:hover {
+      text-decoration: underline;
+    }
+    .form-input {
+      width: 100%;
+      padding: 0.75rem 0.95rem;
+      border-radius: 10px;
+      border: 1px solid var(--border-card);
+      background: #090e1a;
+      color: var(--text-head);
+      font-size: 0.88rem;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+    }
+    .error-banner {
+      display: none;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      padding: 0.65rem 0.85rem;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.4;
+    }
+    .success-banner {
+      display: none;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #6ee7b7;
+      padding: 0.65rem 0.85rem;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.4;
+    }
+    .btn-submit {
+      width: 100%;
+      padding: 0.85rem 1.25rem;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #0284c7, #0369a1);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 0.92rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3);
+      font-family: inherit;
+    }
+    .btn-submit:hover {
+      background: linear-gradient(135deg, #0369a1, #0284c7);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(2, 132, 199, 0.4);
+    }
+    .btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .login-footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.78rem;
+      color: #64748b;
+    }
+    .login-footer a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .login-footer a:hover {
+      text-decoration: underline;
+    }
+    .view-toggle {
+      text-align: center;
+      margin-top: 1.25rem;
+      font-size: 0.8rem;
+      color: var(--text-sub);
+    }
+    .view-toggle a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .view-toggle a:hover {
+      text-decoration: underline;
+    }
+    .security-notice {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-top: 1rem;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="login-logo-wrap">
+          <img src="/static/images/nova_logo_official.png" alt="Nova Cloud Edges Logo" class="login-logo">
+        </div>
+        <h1 class="login-title" id="page-title">Nova Proxy Admin</h1>
+        <p class="login-subtitle" id="page-subtitle">Contact us: Email: support@sun.ac.ug Tel: +256790 00031</p>
+      </div>
+
+      <div id="error-box" class="error-banner"></div>
+      <div id="success-box" class="success-banner"></div>
+
+      <!-- VIEW 1: SIGN IN FORM -->
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input type="text" id="username" class="form-input" value="superadmin" required placeholder="e.g. superadmin or webmaster_jane" autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <label for="password">Password</label>
+            <a href="#" id="link-forgot-pass">Forgot password?</a>
+          </div>
+          <input type="password" id="password" class="form-input" value="Nov@Edge2026!" required placeholder="Enter your credentials" autocomplete="current-password">
+        </div>
+
+        <button type="submit" class="btn-submit" id="btn-login">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/></svg>
+          <span>Sign In to Console</span>
+        </button>
+      </form>
+
+      <!-- VIEW 2: FORGOT PASSWORD RECOVERY FORM -->
+      <form id="forgot-form" style="display: none;">
+        <p style="font-size: 0.82rem; color: var(--text-sub); margin-bottom: 1.25rem; line-height: 1.5;">
+          Enter your username or email address and choose a new password. Common/weak passwords (e.g. 123456, password, admin) will be rejected by system policy.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label" for="recovery-identity">Username or Registered Email</label>
+          <input type="text" id="recovery-identity" class="form-input" required placeholder="admin@novacloudedges.com or superadmin">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="recovery-newpass">New Secure Password</label>
+          <input type="password" id="recovery-newpass" class="form-input" required placeholder="Min 8 chars with mixed case and digits">
+          <small style="display: block; font-size: 0.72rem; color: var(--text-sub); margin-top: 0.3rem;">
+            Must be at least 8 characters and not on common password lists.
+          </small>
+        </div>
+
+        <button type="submit" class="btn-submit" id="btn-recovery">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 2l-2 2m-2-2l2 2"/><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span>Reset &amp; Set New Password</span>
+        </button>
+
+        <div class="view-toggle">
+          <a id="link-back-login">Back to Sign In</a>
+        </div>
+      </form>
+    </div>
+
+    <div class="login-footer">
+      Maintained by: <a href="https://ncloud.co.ug" target="_blank" rel="noopener noreferrer">Nova Cloud Edges</a>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const loginForm = document.getElementById('login-form');
+      const forgotForm = document.getElementById('forgot-form');
+      const linkForgot = document.getElementById('link-forgot-pass');
+      const linkBack = document.getElementById('link-back-login');
+      const errorBox = document.getElementById('error-box');
+      const successBox = document.getElementById('success-box');
+      const pageTitle = document.getElementById('page-title');
+      const pageSubtitle = document.getElementById('page-subtitle');
+      const btnLogin = document.getElementById('btn-login');
+      const btnRecovery = document.getElementById('btn-recovery');
+
+      function showError(msg) {
+        successBox.style.display = 'none';
+        errorBox.textContent = msg;
+        errorBox.style.display = 'block';
+      }
+
+      function showSuccess(msg) {
+        errorBox.style.display = 'none';
+        successBox.textContent = msg;
+        successBox.style.display = 'block';
+      }
+
+      function clearMessages() {
+        errorBox.style.display = 'none';
+        successBox.style.display = 'none';
+      }
+
+      // Check URL query parameters for notifications (e.g. ?session_expired=1)
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('session_expired')) {
+        showError('Session expired. Please sign in again.');
+      } else if (urlParams.get('logged_out')) {
+        showSuccess('You have safely signed out of Nova Proxy Admin.');
+      }
+
+      linkForgot.addEventListener('click', (e) => {
+        e.preventDefault();
+        clearMessages();
+        loginForm.style.display = 'none';
+        forgotForm.style.display = 'block';
+        pageTitle.textContent = 'Account Recovery';
+        pageSubtitle.textContent = 'Reset your password and restore console access';
+      });
+
+      linkBack.addEventListener('click', (e) => {
+        e.preventDefault();
+        clearMessages();
+        forgotForm.style.display = 'none';
+        loginForm.style.display = 'block';
+        pageTitle.textContent = 'Nova Proxy Admin';
+        pageSubtitle.textContent = 'Contact us: Email: support@sun.ac.ug Tel: +256790 00031';
+      });
+
+      // Login form submission
+      loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearMessages();
+        btnLogin.disabled = true;
+        btnLogin.innerHTML = `<span>Authenticating...</span>`;
+
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            showError(data.detail || 'Authentication failed. Please check credentials.');
+            btnLogin.disabled = false;
+            btnLogin.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/></svg><span>Sign In to Console</span>`;
+            return;
+          }
+
+          // Store session token and user info
+          localStorage.setItem('nova_token', data.token);
+          localStorage.setItem('nova_session_token', data.token);
+          localStorage.setItem('nova_role', data.user.role);
+          localStorage.setItem('nova_user', data.user.username);
+          localStorage.setItem('nova_fullname', data.user.full_name);
+          localStorage.setItem('nova_current_user', JSON.stringify(data.user));
+          localStorage.setItem('nova_last_active', String(Date.now()));
+
+          showSuccess('Authenticated! Loading console dashboard...');
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 400);
+        } catch (err) {
+          showError('Network error connecting to authentication server.');
+          btnLogin.disabled = false;
+          btnLogin.innerHTML = `<span>Sign In to Console</span>`;
+        }
+      });
+
+      // Forgot password reset submission
+      forgotForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearMessages();
+        btnRecovery.disabled = true;
+        btnRecovery.innerHTML = `<span>Processing reset...</span>`;
+
+        const identity = document.getElementById('recovery-identity').value.trim();
+        const new_password = document.getElementById('recovery-newpass').value;
+
+        try {
+          const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identity, new_password })
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            showError(data.detail || 'Failed to reset password.');
+            btnRecovery.disabled = false;
+            btnRecovery.innerHTML = `<span>Reset &amp; Set New Password</span>`;
+            return;
+          }
+
+          showSuccess(data.message + ' You can now sign in with your new password.');
+          setTimeout(() => {
+            linkBack.click();
+            document.getElementById('username').value = identity;
+            document.getElementById('password').value = '';
+          }, 1800);
+        } catch (err) {
+          showError('Network error while processing password reset.');
+          btnRecovery.disabled = false;
+          btnRecovery.innerHTML = `<span>Reset &amp; Set New Password</span>`;
+        }
+      });
+    });
+  </script>
+</body>
+</html>

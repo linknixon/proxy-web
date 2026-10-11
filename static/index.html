@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nova Proxy Admin — Nginx & UFW Firewall Manager</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/nova.css">
+  <link rel="stylesheet" href="/static/css/proxy-admin.css">
+</head>
+<body>
+  <div class="admin-layout">
+    <!-- Navbar Header -->
+    <header class="admin-navbar">
+      <div class="admin-nav-inner">
+        <a href="/" class="brand-wrapper">
+          <img src="/static/images/nova_logo_official.png" alt="Nova Cloud Edges Logo" class="brand-logo-img">
+        </a>
+
+        <div class="admin-nav-tools">
+          <div class="status-indicator-pill">
+            <span class="pulse-dot"></span>
+            <span>UFW &amp; Nginx Active</span>
+          </div>
+
+          <div class="status-indicator-pill" id="nav-user-pill" style="gap: 0.5rem;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--secondary);"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span id="nav-username-display" style="font-weight: 700; color: var(--text-main);">Admin</span>
+            <span class="badge-tag" id="nav-userrole-display" style="font-size: 0.68rem; padding: 0.1rem 0.4rem; background: rgba(2, 132, 199, 0.15); color: var(--secondary); border-radius: 4px; text-transform: uppercase;">super admin</span>
+          </div>
+
+          <button class="btn-secondary btn-sm" id="btn-logout" title="Sign out of administrative console" style="padding: 0.35rem 0.65rem; border-radius: 8px; font-size: 0.76rem; display: inline-flex; align-items: center; gap: 0.35rem;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            <span>Sign Out</span>
+          </button>
+
+          <button class="theme-toggle-btn" id="theme-toggle" title="Toggle Light / Dark Mode">
+            <span id="theme-icon" style="display: inline-flex; align-items: center;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="admin-container">
+      <!-- Role Permission Banner -->
+      <div id="role-notice-banner" style="display: none; background: rgba(2, 132, 199, 0.1); border: 1px solid rgba(2, 132, 199, 0.25); border-radius: 9px; padding: 0.65rem 1rem; margin-bottom: 1.25rem; font-size: 0.82rem; color: var(--secondary); font-weight: 600;">
+        <span id="role-banner-text">Viewing as Webmaster: Domain creation permitted. Editing and suspension permissions are reserved for Super Admin.</span>
+      </div>
+
+      <!-- Module Navigation Section (Static Cards - Non-scrollable) -->
+      <nav class="module-cards-nav" aria-label="System Modules">
+        <div class="module-cards-grid">
+          <button class="module-nav-card nav-tab-item active" data-tab="tab-hosts" id="tab-btn-hosts" type="button">
+            <div class="card-icon-wrap hosts-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/><circle cx="12" cy="12" r="4"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Proxy Hosts</span>
+              </div>
+              <span class="card-desc">Reverse proxy routing & upstream servers</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-ufw" id="tab-btn-ufw" type="button">
+            <div class="card-icon-wrap ufw-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">UFW Firewall (WAF)</span>
+                <span class="role-lock-badge" id="badge-ufw-role">Super Admin</span>
+              </div>
+              <span class="card-desc">Network packet filtering & port rules</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-security" id="tab-btn-security" type="button">
+            <div class="card-icon-wrap security-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">WHOIS & Abuse</span>
+                <span class="role-lock-badge">Security</span>
+              </div>
+              <span class="card-desc">Domain registrar intel & abuse logs</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-billing" id="tab-btn-billing" type="button">
+            <div class="card-icon-wrap billing-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Domain & SSL Expiry</span>
+                <span class="role-lock-badge">Billing</span>
+              </div>
+              <span class="card-desc">Cert expirations & renewal tracking</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-suspension" id="tab-btn-suspension" type="button">
+            <div class="card-icon-wrap susp-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Suspension Notice</span>
+                <span class="role-lock-badge">Super Admin</span>
+              </div>
+              <span class="card-desc">503 HTTP maintenance statement</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-editor" id="tab-btn-editor" type="button">
+            <div class="card-icon-wrap tester-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Nginx Syntax Tester</span>
+              </div>
+              <span class="card-desc">Directives & syntax validation (nginx -t)</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-logs" id="tab-btn-logs" type="button">
+            <div class="card-icon-wrap logs-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Audit Logs</span>
+              </div>
+              <span class="card-desc">Comprehensive system trail & events</span>
+            </div>
+          </button>
+
+          <button class="module-nav-card nav-tab-item" data-tab="tab-users" id="tab-btn-users" type="button">
+            <div class="card-icon-wrap users-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <div class="card-text-wrap">
+              <div class="card-title-row">
+                <span class="card-title">Team Users</span>
+                <span class="role-lock-badge">Super Admin</span>
+              </div>
+              <span class="card-desc">Role-based accounts & credentials</span>
+            </div>
+          </button>
+        </div>
+      </nav>
+
+      <!-- Hardware Telemetry & Real-Time Usage Graph -->
+      <section class="telemetry-section" id="system-telemetry-panel">
+        <div class="panel-card telemetry-card">
+          <div class="telemetry-header">
+            <div class="telemetry-title-group">
+              <div class="telemetry-pulse-indicator">
+                <span class="telemetry-ping"></span>
+                <span class="telemetry-dot"></span>
+              </div>
+              <div>
+                <div class="telemetry-title">System Hardware & Live Telemetry</div>
+                <div class="telemetry-subtitle">Auto-detected Host OS, RAM, CPU and real-time usage metrics</div>
+              </div>
+            </div>
+            <div class="telemetry-header-badges">
+              <div class="telemetry-badge os-badge" id="telemetry-os-badge" title="Auto-detected Operating System">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+                <span id="telemetry-os-text">Detecting OS...</span>
+              </div>
+              <div class="telemetry-badge host-badge" id="telemetry-host-badge" title="Host Machine Node">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 6 8-4 8 4-8 4-8-4Z"/><path d="m4 12 8 4 8-4"/><path d="m4 18 8 4 8-4"/></svg>
+                <span id="telemetry-hostname-text">Host: localhost</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gauges Row -->
+          <div class="telemetry-gauges-grid">
+            <!-- CPU Gauge Card -->
+            <div class="telemetry-gauge-box">
+              <div class="gauge-header">
+                <div class="gauge-title-wrap">
+                  <span class="gauge-dot cpu-dot"></span>
+                  <span class="gauge-label">CPU Utilization</span>
+                </div>
+                <span class="gauge-metric-value" id="cpu-current-percent">0.0%</span>
+              </div>
+              <div class="gauge-progress-bar">
+                <div class="gauge-progress-fill cpu-fill" id="cpu-progress-fill" style="width: 0%;"></div>
+              </div>
+              <div class="gauge-footer-meta">
+                <span id="cpu-cores-text">8 Cores</span>
+                <span id="cpu-load-text">Load: 0.00, 0.00, 0.00</span>
+              </div>
+            </div>
+
+            <!-- RAM Gauge Card -->
+            <div class="telemetry-gauge-box">
+              <div class="gauge-header">
+                <div class="gauge-title-wrap">
+                  <span class="gauge-dot ram-dot"></span>
+                  <span class="gauge-label">RAM Memory Usage</span>
+                </div>
+                <span class="gauge-metric-value" id="ram-current-percent">0.0%</span>
+              </div>
+              <div class="gauge-progress-bar">
+                <div class="gauge-progress-fill ram-fill" id="ram-progress-fill" style="width: 0%;"></div>
+              </div>
+              <div class="gauge-footer-meta">
+                <span id="ram-usage-text">0.00 GB / 0.00 GB</span>
+                <span id="ram-avail-text">0.00 GB Free</span>
+              </div>
+            </div>
+
+            <!-- Disk / Storage Gauge Card -->
+            <div class="telemetry-gauge-box">
+              <div class="gauge-header">
+                <div class="gauge-title-wrap">
+                  <span class="gauge-dot disk-dot"></span>
+                  <span class="gauge-label">Storage (Root Disk)</span>
+                </div>
+                <span class="gauge-metric-value" id="disk-current-percent">0.0%</span>
+              </div>
+              <div class="gauge-progress-bar">
+                <div class="gauge-progress-fill disk-fill" id="disk-progress-fill" style="width: 0%;"></div>
+              </div>
+              <div class="gauge-footer-meta">
+                <span id="disk-usage-text">0.0 GB / 0.0 GB</span>
+                <span id="disk-proxy-status">Nginx + UFW Online</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Graph Canvas -->
+          <div class="telemetry-graph-wrapper">
+            <div class="graph-legend-bar">
+              <div class="legend-items">
+                <div class="legend-pill cpu-legend">
+                  <span class="legend-color-box cpu-color"></span>
+                  <span>CPU Usage: <strong id="graph-legend-cpu">0.0%</strong></span>
+                </div>
+                <div class="legend-pill ram-legend">
+                  <span class="legend-color-box ram-color"></span>
+                  <span>RAM Usage: <strong id="graph-legend-ram">0.0%</strong></span>
+                </div>
+              </div>
+              <div class="graph-stream-status">
+                <span class="stream-pulse"></span>
+                <span>Live Feed (3s Interval)</span>
+              </div>
+            </div>
+
+            <div class="svg-graph-container" id="metrics-chart-container">
+              <svg id="metrics-svg" viewBox="0 0 800 160" preserveAspectRatio="none" class="metrics-svg">
+                <!-- SVG dynamically drawn by app.js -->
+              </svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Top Stat Cards -->
+      <section class="stat-cards-grid">
+        <div class="stat-card">
+          <div>
+            <div class="stat-label">Total Proxy Hosts</div>
+            <div class="stat-val" id="stat-total-hosts">-</div>
+            <div class="stat-sub">Centralized reverse proxy routes</div>
+          </div>
+          <div class="stat-icon-wrapper">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/></svg>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div>
+            <div class="stat-label">Active & Online</div>
+            <div class="stat-val" style="color: var(--accent-emerald);" id="stat-active-hosts">-</div>
+            <div class="stat-sub">Routing incoming traffic normally</div>
+          </div>
+          <div class="stat-icon-wrapper" style="background: rgba(16, 185, 129, 0.12); color: var(--accent-emerald);">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div>
+            <div class="stat-label">UFW Firewall Rules</div>
+            <div class="stat-val" style="color: var(--secondary);" id="stat-ufw-rules">-</div>
+            <div class="stat-sub">Active packet filtering & WAF</div>
+          </div>
+          <div class="stat-icon-wrapper">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div>
+            <div class="stat-label">Suspended Domains</div>
+            <div class="stat-val" style="color: #f59e0b;" id="stat-suspended-hosts">-</div>
+            <div class="stat-sub">Displaying 503 statement</div>
+          </div>
+          <div class="stat-icon-wrapper" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 1: PROXY HOSTS -->
+      <section id="tab-hosts" class="tab-content active">
+        <div class="toolbar-section">
+          <div class="search-box-wrapper">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input type="text" id="host-search-input" placeholder="Search domain, host IP, or port...">
+          </div>
+
+          <div class="toolbar-actions">
+            <div class="filter-pills">
+              <button class="filter-pill active" data-filter="all">All</button>
+              <button class="filter-pill" data-filter="active">Active</button>
+              <button class="filter-pill" data-filter="suspended">Suspended</button>
+              <button class="filter-pill" data-filter="ssl">SSL</button>
+            </div>
+
+            <!-- Migration & Backup Actions -->
+            <button class="btn-secondary" id="btn-export-all-zip" title="Export all virtual hosts as a .zip backup archive">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Backup All (.zip)
+            </button>
+
+            <button class="btn-secondary" id="btn-open-migrate-modal" title="Import / Restore Nginx .conf files for server migration">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+              Import / Migrate (.conf)
+            </button>
+
+            <button class="btn-primary" id="btn-open-create-modal">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+              Add Proxy Host
+            </button>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              <span>Reverse Proxy Hosts</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-refresh-hosts">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Refresh
+            </button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Domain Names</th>
+                  <th>Forward Target</th>
+                  <th>Features</th>
+                  <th>SSL Certificate</th>
+                  <th>Suspension Status</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="hosts-table-body">
+                <tr>
+                  <td colspan="6" style="text-align: center; padding: 2.5rem; color: var(--text-muted);">
+                    Loading proxy hosts from database...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="hosts-pagination" style="display: none;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 2: UFW FIREWALL & WAF (SUPER ADMIN) -->
+      <section id="tab-ufw" class="tab-content" style="display: none;">
+        <div class="toolbar-section">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">UFW Firewall & WAF Rules</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Ubuntu 22.04 LTS packet filtering, port security, and IP drop list</p>
+          </div>
+          <button class="btn-primary" id="btn-open-ufw-modal">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+            Add Firewall Rule
+          </button>
+        </div>
+
+        <div class="panel-card" style="margin-bottom: 1.5rem;">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Host Machine &amp; UFW Firewall Rules (System Synced)</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-refresh-ufw">Refresh Rules</button>
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Rule ID</th>
+                  <th>Action</th>
+                  <th>Port / Service</th>
+                  <th>Protocol</th>
+                  <th>Source IP</th>
+                  <th>Comment / Purpose</th>
+                  <th>Status</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="ufw-rules-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="ufw-pagination" style="display: none;"></div>
+        </div>
+
+        <!-- UFW CLI Terminal View -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+              <span>Live Terminal: <code>ufw status numbered</code></span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-copy-ufw-cli">Copy Terminal Output</button>
+          </div>
+          <div style="padding: 1.25rem;">
+            <div class="code-container">
+              <pre id="ufw-cli-output" style="margin: 0; color: #38bdf8; font-family: var(--font-primary); font-size: 0.82rem; line-height: 1.55;">Loading UFW status...</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: WHOIS & DOMAIN ABUSE (SECURITY ROLE) -->
+      <section id="tab-security" class="tab-content" style="display: none;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem;" class="responsive-2col">
+          <!-- WHOIS Lookup Tool -->
+          <div class="panel-card">
+            <div class="panel-header">
+              <div class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <span>Live WHOIS & DNS Intelligence</span>
+              </div>
+            </div>
+            <div style="padding: 1.25rem;">
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <input type="text" id="whois-domain-input" placeholder="Enter domain (e.g. novacloudedges.com)" style="flex: 1; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                <button class="btn-primary" id="btn-run-whois">Query WHOIS</button>
+              </div>
+              <div id="whois-result-box" class="code-container" style="min-height: 170px;">
+                <pre id="whois-result-pre" style="margin: 0; color: #a5f3fc; font-size: 0.82rem; font-family: var(--font-primary);">Enter a domain name above to query registrar, nameservers, DNSSEC, and expiration dates.</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Report Abuse & Drop IP -->
+          <div class="panel-card">
+            <div class="panel-header">
+              <div class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>File Domain Abuse & Quick Block IP</span>
+              </div>
+            </div>
+            <form id="abuse-report-form" style="padding: 1.25rem;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                <div>
+                  <label style="display: block; font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.25rem;">Attacked Domain</label>
+                  <input type="text" id="abuse-domain" placeholder="api.novacloud.io" required style="width: 100%; padding: 0.5rem 0.65rem; border-radius: 7px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.25rem;">Offending Source IP</label>
+                  <input type="text" id="abuse-ip" placeholder="198.51.100.99" required style="width: 100%; padding: 0.5rem 0.65rem; border-radius: 7px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+                </div>
+              </div>
+              <div style="margin-bottom: 0.75rem;">
+                <label style="display: block; font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.25rem;">Abuse Category</label>
+                <select id="abuse-category" style="width: 100%; padding: 0.5rem 0.65rem; border-radius: 7px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+                  <option value="SQLi / Web Exploit Probe">SQLi / Web Exploit Probe</option>
+                  <option value="DDoS / HTTP Rate Flood">DDoS / HTTP Rate Flood</option>
+                  <option value="Brute Force Login Attacks">Brute Force Login Attacks</option>
+                  <option value="Phishing & Impersonation">Phishing & Impersonation</option>
+                </select>
+              </div>
+              <div style="margin-bottom: 0.85rem;">
+                <label style="display: block; font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.25rem;">Incident Notes</label>
+                <input type="text" id="abuse-notes" placeholder="Repeated unauthorized admin traversal" style="width: 100%; padding: 0.5rem 0.65rem; border-radius: 7px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.82rem;">
+              </div>
+              <button type="submit" class="btn-primary" style="width: 100%; justify-content: center;">
+                Submit Report & Auto-Block in UFW
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Abuse Incidents History -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+              <span>Active Abuse Incidents & Mitigations</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-refresh-abuse">Refresh</button>
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Target Domain</th>
+                  <th>Offending IP</th>
+                  <th>Category</th>
+                  <th>Mitigation</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="abuse-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="abuse-pagination" style="display: none;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 4: DOMAIN & SSL BILLING (BILLING ROLE) -->
+      <section id="tab-billing" class="tab-content" style="display: none;">
+        <div class="toolbar-section">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">Domain & SSL Expiration Timelines</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Track renewal deadlines, certificate lifetimes, and active subscriptions</p>
+          </div>
+          <button class="btn-secondary btn-sm" id="btn-refresh-billing">Refresh Expiry Data</button>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+              <span>Domain Expiration & Renewal Schedule</span>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Domain</th>
+                  <th>Authority</th>
+                  <th>Domain Reg Expiry</th>
+                  <th>SSL Expiry Date</th>
+                  <th>Renewal Status</th>
+                  <th>Billing Health</th>
+                  <th style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="billing-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="billing-pagination" style="display: none;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 5: SUSPENSION STATEMENT MANAGEMENT -->
+      <section id="tab-suspension" class="tab-content" style="display: none;">
+        <div class="toolbar-section">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">Public Suspension Notice & Statement</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Define the statement displayed in visitors' browsers when they visit any suspended domain</p>
+          </div>
+          <a href="/suspended?domain=demo.novacloudedges.com" target="_blank" class="btn-secondary btn-sm" style="display: inline-flex; align-items: center; gap: 0.4rem;">
+            <span>Live Page Preview</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
+          </a>
+        </div>
+
+        <div class="panel-card" style="margin-bottom: 1.5rem;">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" x2="19.07" y1="4.93" y2="19.07"/></svg>
+              <span>Customize Suspension Statement & Support Contacts</span>
+            </div>
+          </div>
+          <form id="suspension-settings-form" style="padding: 1.5rem;">
+            <div style="margin-bottom: 1.25rem;">
+              <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">Suspension Page Header Title</label>
+              <input type="text" id="susp-title-input" class="form-input" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main);" required>
+            </div>
+            <div style="margin-bottom: 1.25rem;">
+              <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">Public Statement Message</label>
+              <textarea id="susp-msg-input" style="width: 100%; min-height: 80px; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem; line-height: 1.5;" required></textarea>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;" class="responsive-2col">
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">Support Contact Email</label>
+                <input type="email" id="susp-email-input" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main);" required>
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">Support Hotline Phone</label>
+                <input type="text" id="susp-phone-input" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main);" required>
+              </div>
+            </div>
+            <button type="submit" class="btn-primary" id="btn-save-suspension-settings">
+              Save Suspension Statement
+            </button>
+          </form>
+        </div>
+
+        <!-- SMTP & Managed Action Email Notifications Card -->
+        <div class="panel-card" style="margin-bottom: 1.5rem;" id="smtp-notification-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              <span>SMTP Configuration &amp; Managed Action Email Alerts</span>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <span class="pulse-dot" id="smtp-status-pulse"></span>
+              <span id="smtp-status-badge" style="font-size: 0.76rem; font-weight: 700; color: var(--accent-emerald);">SMTP Ready</span>
+            </div>
+          </div>
+          <form id="smtp-settings-form" style="padding: 1.5rem;">
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem; line-height: 1.5;">
+              Configure outgoing SMTP mail server to automatically broadcast immediate security alerts for UFW firewall rule changes, domain IP blocking, impending SSL expirations, domain registration deadlines, and website suspensions.
+            </p>
+
+            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; margin-bottom: 1rem;" class="responsive-2col">
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">SMTP Server Host</label>
+                <input type="text" id="smtp-host-input" placeholder="e.g. mail.ncloud.co.ug or smtp.gmail.com" required style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">SMTP Port</label>
+                <input type="number" id="smtp-port-input" value="587" required style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;" class="responsive-2col">
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">SMTP Username / Sender Email</label>
+                <input type="text" id="smtp-user-input" placeholder="alerts@novacloudedges.com" required style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">SMTP Password / App Key</label>
+                <input type="password" id="smtp-pass-input" placeholder="••••••••••••" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;" class="responsive-2col">
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">Admin Alert Recipients (Comma-separated)</label>
+                <input type="text" id="smtp-to-input" placeholder="admin@novacloudedges.com, secops@novacloudedges.com" required style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.35rem;">TLS / Encryption</label>
+                <select id="smtp-tls-input" style="width: 100%; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                  <option value="starttls">STARTTLS (Port 587 - Recommended)</option>
+                  <option value="ssl">SSL / TLS (Port 465)</option>
+                  <option value="none">Plain / Unencrypted (Port 25)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 1.5rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 10px; padding: 1rem;">
+              <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 0.65rem;">Active Action Triggers (Broadcast Emails on)</label>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.65rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                  <input type="checkbox" id="trigger-ufw" checked>
+                  <span>UFW Rule Add / Edit / Delete</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                  <input type="checkbox" id="trigger-blocking" checked>
+                  <span>Abuse Reports &amp; IP Blocks</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                  <input type="checkbox" id="trigger-ssl" checked>
+                  <span>SSL Expiration Warnings</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                  <input type="checkbox" id="trigger-domain" checked>
+                  <span>Domain Registration Deadlines</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                  <input type="checkbox" id="trigger-suspension" checked>
+                  <span>Website Suspension / Live Status</span>
+                </label>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+              <button type="submit" class="btn-primary" id="btn-save-smtp">Save SMTP Configuration</button>
+              <button type="button" class="btn-secondary" id="btn-test-smtp">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 2 11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send Test Alert Email
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 6: NGINX SYNTAX TESTER -->
+      <section id="tab-editor" class="tab-content" style="display: none;">
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              <span>Nginx Configuration Syntax Validator (<code>nginx -t</code>)</span>
+            </div>
+            <div style="display: flex; gap: 0.4rem;">
+              <button class="btn-secondary btn-sm" id="btn-load-sample-config">Load Sample Block</button>
+              <button class="btn-primary btn-sm" id="btn-validate-now">Run Syntax Check</button>
+            </div>
+          </div>
+          <div style="padding: 1.25rem;">
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+              Paste or inspect any Nginx server block below. The validator verifies semicolons, matching brackets, and directives.
+            </p>
+            <div class="code-container">
+              <textarea class="code-textarea" id="nginx-test-editor" spellcheck="false">server {
+    listen 80;
+    server_name example.com www.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}</textarea>
+            </div>
+            <div id="nginx-validation-output" style="margin-top: 1rem; display: none;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: AUDIT LOGS & ACCESS ANALYTICS -->
+      <section id="tab-logs" class="tab-content" style="display: none;">
+        <!-- Live Access Logs & Traffic by Client IP Graph -->
+        <div class="panel-card access-log-analytics-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              <span>Access &amp; Request Distribution by Client IP (Top 6 IPs)</span>
+            </div>
+            <div style="font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+              <span>Total Requests: <strong id="ip-total-events" style="color: var(--secondary);">-</strong></span>
+              <span>Unique IPs: <strong id="ip-unique-count" style="color: var(--accent-emerald);">-</strong></span>
+              <span id="abnormal-traffic-badge" class="ssl-badge valid" style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.74rem;">
+                <span class="pulse-dot" style="width: 7px; height: 7px;"></span>
+                <span id="abnormal-traffic-text">Normal Baseline</span>
+              </span>
+            </div>
+          </div>
+          <div style="padding: 1.15rem 1.25rem;">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.85rem 0;">
+              Live traffic breakdown ranking top remote client IPs, source nodes, and administrative interaction frequency (top 6 IPs displayed):
+            </p>
+            <div id="access-ip-bars-container" class="ip-bars-grid">
+              <!-- Dynamically populated IP distribution graph -->
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>Security &amp; Deployment Audit Trail (with Traffic Anomaly Detection)</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-refresh-logs">Refresh Logs</button>
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                  <th>Details</th>
+                  <th>Status</th>
+                  <th>Traffic &amp; Threat Detection</th>
+                  <th>Client IP</th>
+                </tr>
+              </thead>
+              <tbody id="logs-table-body">
+                <!-- Dynamically filled -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="logs-pagination" style="display: none;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 8: TEAM USERS MANAGEMENT (SUPER ADMIN) - INDEPENDENT SECTION -->
+      <section id="tab-users" class="tab-content" style="display: none;">
+        <div class="toolbar-section">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">Team Members & RBAC Roles</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Manage team accounts, assign administrative roles, edit, delete, and suspend account access</p>
+          </div>
+          <button class="btn-primary" id="btn-open-user-modal">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Team User
+          </button>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span>Configured System Users</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="btn-refresh-users">Refresh Users</button>
+          </div>
+          <div class="table-responsive">
+            <table class="nova-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Full Name &amp; Username</th>
+                  <th>Email Address</th>
+                  <th>Assigned Role</th>
+                  <th>Active Status</th>
+                  <th style="text-align: right;">Delete &amp; Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-wrapper" id="users-pagination" style="display: none;"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- App Footer -->
+    <footer class="admin-footer">
+      <div class="admin-footer-inner">
+        <div>
+          <span>Nova Proxy Admin &bull; Centralized Reverse Proxy & UFW Engine</span>
+        </div>
+        <div class="footer-credit">
+          Maintained by: <a href="https://ncloud.co.ug" target="_blank" rel="noopener noreferrer">Nova Cloud Edges</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- MODAL: ADD / EDIT PROXY HOST -->
+  <div class="modal-overlay" id="host-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="panel-title" id="host-modal-title">New Proxy Host</h3>
+        <button class="btn-icon" id="btn-close-host-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="host-form">
+        <input type="hidden" id="edit-host-id" value="">
+        <div class="modal-body">
+          <div class="form-group" style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Domain Names *</label>
+            <input type="text" class="form-input" id="input-domain-names" placeholder="e.g. sun.ac.ug, novacloud.co.ug, or app.sun.ac.ug" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+            <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.2rem;">Accepts primary apex domains (e.g. domain.com) and subdomains. Separate multiple aliases with commas.</small>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Application Name / Service Label</label>
+            <input type="text" class="form-input" id="input-app-name" placeholder="e.g. University Portal, ERP Backend, Nova API" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+            <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.2rem;">Specify the application name or service running behind this proxy host.</small>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 0.65rem; margin-bottom: 1rem;">
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Scheme</label>
+              <select id="input-forward-scheme" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+                <option value="http">http</option>
+                <option value="https">https</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Forward Host / IP *</label>
+              <input type="text" class="form-input" id="input-forward-host" placeholder="127.0.0.1" value="127.0.0.1" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+            </div>
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Port *</label>
+              <input type="number" class="form-input" id="input-forward-port" placeholder="8080" value="8080" required style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+            </div>
+          </div>
+
+          <!-- Feature Toggles -->
+          <div style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 9px; padding: 0.85rem; margin-bottom: 1rem;">
+            <div style="font-weight: 700; font-size: 0.8rem; margin-bottom: 0.6rem; color: var(--text-main);">Proxy Protections & Protocol Options</div>
+            
+            <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer;">
+              <div>
+                <div style="font-size: 0.84rem; font-weight: 600;">WebSocket Support</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Enable Upgrade and Connection headers</div>
+              </div>
+              <input type="checkbox" id="input-websocket" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
+            </label>
+
+            <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer;">
+              <div>
+                <div style="font-size: 0.84rem; font-weight: 600;">Block Common Exploits</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Shield hidden files (.git, .env) and malicious queries</div>
+              </div>
+              <input type="checkbox" id="input-block-exploits" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
+            </label>
+
+            <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+              <div>
+                <div style="font-size: 0.84rem; font-weight: 600;">Enforce SSL (HTTPS Redirect)</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Redirect HTTP to HTTPS via Let's Encrypt</div>
+              </div>
+              <input type="checkbox" id="input-ssl-forced" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
+            </label>
+          </div>
+
+          <div style="margin-bottom: 1rem;" id="suspension-reason-group">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Specific Suspension Statement Reason</label>
+            <input type="text" id="input-suspended-reason" placeholder="Administrative Maintenance or Account Review" value="Administrative Maintenance or Policy Enforcement" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem;">
+          </div>
+
+          <div>
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Custom Nginx Directives (Optional)</label>
+            <textarea id="input-custom-nginx" placeholder="# Additional location directives&#10;client_max_body_size 50M;" style="width: 100%; min-height: 70px; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-family: var(--font-primary); font-size: 0.8rem;"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" id="btn-cancel-host-modal">Cancel</button>
+          <button type="submit" class="btn-primary" id="btn-save-host">Save Proxy Host</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD UFW RULE (SUPER ADMIN) -->
+  <div class="modal-overlay" id="ufw-modal">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3 class="panel-title" id="ufw-modal-title">Add UFW Firewall Rule</h3>
+        <button class="btn-icon" id="btn-close-ufw-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="ufw-form">
+        <input type="hidden" id="ufw-edit-id" value="">
+        <div class="modal-body">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem;">Action</label>
+              <select id="ufw-rule-type" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                <option value="ALLOW">ALLOW (Open Port)</option>
+                <option value="DENY">DENY (Block Traffic)</option>
+                <option value="LIMIT">LIMIT (Rate-Limit Brute Force)</option>
+                <option value="REJECT">REJECT (Drop with RST)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem;">Port / Service</label>
+              <input type="text" id="ufw-port" placeholder="e.g. 80, 443, 22, Any" value="80" required style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem;">Protocol</label>
+              <select id="ufw-protocol" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+                <option value="any">Any Protocol</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem;">Source IP / CIDR (IPv4 or IPv6)</label>
+              <input type="text" id="ufw-source-ip" placeholder="Anywhere, 192.168.1.0/24, or 2001:db8::/32" value="Anywhere" required style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+            </div>
+          </div>
+
+          <div style="margin-bottom: 0.5rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem;">Comment / Rule Description</label>
+            <input type="text" id="ufw-comment" placeholder="e.g. Public HTTP traffic" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" id="btn-cancel-ufw-modal">Cancel</button>
+          <button type="submit" class="btn-primary" id="ufw-submit-btn">Apply UFW Rule</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD / EDIT TEAM USER (SUPER ADMIN) -->
+  <div class="modal-overlay" id="user-modal">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3 class="panel-title" id="user-modal-title">Add Team Member</h3>
+        <button class="btn-icon" id="btn-close-user-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="user-form">
+        <input type="hidden" id="edit-user-id" value="">
+        <div class="modal-body">
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Full Name *</label>
+            <input type="text" id="user-fullname" placeholder="e.g. David Ssebuwufu" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Username *</label>
+              <input type="text" id="user-username" placeholder="david_ops" required style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+            </div>
+            <div>
+              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Assigned Role *</label>
+              <select id="user-role" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+                <option value="webmaster">Webmaster (Add Domains)</option>
+                <option value="security">Security (WHOIS, Abuse & SSL)</option>
+                <option value="billing">Billing (Domain Expiry)</option>
+                <option value="super_admin">Super Admin (Full Access)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Email Address *</label>
+            <input type="email" id="user-email" placeholder="david@novacloudedges.com" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Password <span id="user-pass-hint" style="color: var(--text-muted); font-size: 0.74rem;">(Set initial password)</span></label>
+            <input type="password" id="user-password" value="Nov@Proxy2026!" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.85rem;">
+          </div>
+
+          <div id="user-status-group" style="display: none; padding: 0.65rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px;">
+            <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+              <div>
+                <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-main);">Active Account Status</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Uncheck to suspend user access immediately</div>
+              </div>
+              <input type="checkbox" id="user-is-active" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" id="btn-cancel-user-modal">Cancel</button>
+          <button type="submit" class="btn-primary" id="btn-save-user">Save Account</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: NGINX CONFIG MIGRATION & BACKUP (IMPORT / RESTORE) -->
+  <div class="modal-overlay" id="migrate-modal">
+    <div class="modal-card" style="max-width: 720px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <div class="card-icon-wrap tester-icon" style="width: 28px; height: 28px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+          </div>
+          <h3 class="panel-title">Nginx Migration Engine — Import & Restore</h3>
+        </div>
+        <button class="btn-icon" id="btn-close-migrate-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="migrate-form">
+        <div class="modal-body">
+          <div style="background: rgba(2, 132, 199, 0.08); border: 1px solid rgba(2, 132, 199, 0.2); border-radius: 9px; padding: 0.75rem 0.95rem; margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-muted); line-height: 1.45;">
+            <strong style="color: var(--secondary);">Seamless Server Migration:</strong> Import a single site configuration file (e.g. <code>app.domain.com.conf</code>) or a multi-site consolidated file from another server. The engine automatically extracts <code>server_name</code>, upstream <code>proxy_pass</code> targets, SSL certificates, websocket headers, and maintenance modes.
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Upload .conf File</label>
+            <input type="file" id="migrate-file-input" accept=".conf,.txt" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px dashed var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem; cursor: pointer;">
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Or Paste Nginx Server Block Configuration *</label>
+            <textarea id="migrate-conf-text" placeholder="server {&#10;    listen 80;&#10;    server_name example.com www.example.com;&#10;    location / {&#10;        proxy_pass http://127.0.0.1:3000;&#10;    }&#10;}" required style="width: 100%; min-height: 170px; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: #38bdf8; font-family: var(--font-primary); font-size: 0.82rem; line-height: 1.45;"></textarea>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.65rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px;">
+            <div>
+              <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-main);">Overwrite Existing Routes</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted);">If the domain already exists, update its upstream targets and features</div>
+            </div>
+            <input type="checkbox" id="migrate-overwrite" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
+          </div>
+
+          <div id="migrate-result-box" style="margin-top: 1rem; display: none;"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" id="btn-cancel-migrate-modal">Cancel</button>
+          <button type="submit" class="btn-primary" id="btn-submit-migrate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Import & Migrate Configuration
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: NGINX CONFIG VIEWER -->
+  <div class="modal-overlay" id="config-modal">
+    <div class="modal-card" style="max-width: 760px;">
+      <div class="modal-header">
+        <h3 class="panel-title" id="config-modal-title">Nginx Virtual Host Configuration</h3>
+        <button class="btn-icon" id="btn-close-config-modal" title="Close">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="code-container" style="max-height: 420px; overflow-y: auto;">
+          <pre id="config-modal-code" style="margin: 0; color: #38bdf8; font-family: var(--font-primary); font-size: 0.82rem; line-height: 1.55;"></pre>
+        </div>
+        <div id="modal-validation-result" style="margin-top: 1rem; display: none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" id="btn-validate-modal-config">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Validate Syntax (nginx -t)
+        </button>
+        <button type="button" class="btn-secondary" id="btn-copy-config">Copy Config</button>
+        <button type="button" class="btn-primary" id="btn-close-config-done">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- App Script -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
