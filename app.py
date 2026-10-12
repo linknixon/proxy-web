@@ -191,9 +191,71 @@ class SystemSetting(Base):
     setting_value = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-# Ensure tables exist
+# ---------------------------------------------------------
+# Automatic Schema Migration (Ensures all columns exist in MySQL)
+# ---------------------------------------------------------
+def auto_migrate_schema():
+    """Automatically adds missing columns to existing MySQL tables without losing data."""
+    try:
+        with engine.connect() as conn:
+            existing_tables = {t[0] for t in conn.execute(text("SHOW TABLES")).fetchall()}
+
+            # 1. users table
+            if "users" in existing_tables:
+                user_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM users")).fetchall()}
+                if "full_name" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(150) NOT NULL DEFAULT 'Administrator' AFTER username"))
+                if "allowed_domains" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN allowed_domains TEXT NULL AFTER role"))
+                if "is_active" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER allowed_domains"))
+                if "password_hash" not in user_cols and "password" in user_cols:
+                    conn.execute(text("ALTER TABLE users CHANGE COLUMN password password_hash VARCHAR(255) NOT NULL"))
+
+            # 2. proxy_hosts table
+            if "proxy_hosts" in existing_tables:
+                host_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM proxy_hosts")).fetchall()}
+                if "app_name" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN app_name VARCHAR(150) DEFAULT 'Web Application' AFTER domain_names"))
+                if "suspended_reason" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN suspended_reason VARCHAR(255) DEFAULT 'Administrative Policy Suspension' AFTER is_suspended"))
+                if "custom_nginx_config" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN custom_nginx_config TEXT NULL AFTER suspended_reason"))
+                if "websocket_support" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN websocket_support TINYINT(1) NOT NULL DEFAULT 1"))
+                if "block_exploits" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN block_exploits TINYINT(1) NOT NULL DEFAULT 1"))
+                if "ssl_forced" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_forced TINYINT(1) NOT NULL DEFAULT 1"))
+                if "ssl_provider" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_provider VARCHAR(50) NOT NULL DEFAULT 'Let\\'s Encrypt'"))
+                if "ssl_status" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_status VARCHAR(50) NOT NULL DEFAULT 'active'"))
+                if "ssl_expires_at" not in host_cols:
+                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_expires_at DATE NULL"))
+
+            # 3. certificates table
+            if "certificates" in existing_tables:
+                cert_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM certificates")).fetchall()}
+                if "domain_registered_at" not in cert_cols:
+                    conn.execute(text("ALTER TABLE certificates ADD COLUMN domain_registered_at DATE NULL"))
+                if "domain_expires_at" not in cert_cols:
+                    conn.execute(text("ALTER TABLE certificates ADD COLUMN domain_expires_at DATE NULL"))
+
+            # 4. ufw_rules table
+            if "ufw_rules" in existing_tables:
+                ufw_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM ufw_rules")).fetchall()}
+                if "to_ip" not in ufw_cols:
+                    conn.execute(text("ALTER TABLE ufw_rules ADD COLUMN to_ip VARCHAR(50) DEFAULT 'Anywhere'"))
+
+            conn.commit()
+    except Exception as e:
+        print(f"Notice: Auto schema migration check: {e}")
+
+# Ensure tables and columns exist
 try:
     Base.metadata.create_all(bind=engine)
+    auto_migrate_schema()
 except Exception as e:
     print(f"Notice: Database metadata check: {e}")
 
