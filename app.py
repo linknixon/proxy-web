@@ -782,6 +782,61 @@ def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     susp_phone = get_setting(db, "suspension_support_phone", "+256 700 892 110")
 
     if host.is_suspended:
+        # Determine SSL certificates for HTTPS 503 block
+        cert_path = f"/etc/letsencrypt/live/{primary_domain}/fullchain.pem"
+        key_path = f"/etc/letsencrypt/live/{primary_domain}/privkey.pem"
+        if host.custom_nginx_config:
+            m_c = re.search(r'ssl_certificate\s+([^;]+);', host.custom_nginx_config)
+            m_k = re.search(r'ssl_certificate_key\s+([^;]+);', host.custom_nginx_config)
+            if m_c and m_k:
+                cert_path = m_c.group(1).strip()
+                key_path = m_k.group(1).strip()
+
+        has_ssl = host.ssl_forced or os.path.exists(cert_path)
+        landing_html = (
+            f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{susp_title}</title>'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            f'<style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:1.5rem;box-sizing:border-box}}'
+            f'.card{{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:540px;width:100%;padding:2.5rem;box-shadow:0 12px 40px rgba(0,0,0,0.6);text-align:center}}'
+            f'.badge{{display:inline-block;padding:0.35rem 0.85rem;border-radius:9999px;font-size:0.78rem;font-weight:700;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);margin-bottom:1.25rem;text-transform:uppercase;letter-spacing:0.05em}}'
+            f'h1{{font-size:1.6rem;font-weight:800;margin:0 0 1rem;color:#f8fafc}}p{{color:#94a3b8;font-size:0.95rem;line-height:1.6;margin:0 0 1.5rem}}'
+            f'.reason{{background:#0f172a;border-left:4px solid #f59e0b;padding:0.85rem 1rem;text-align:left;border-radius:6px;font-size:0.88rem;color:#cbd5e1;margin-bottom:1.5rem}}'
+            f'.contact{{font-size:0.84rem;color:#64748b;border-top:1px solid #334155;padding-top:1.25rem}}a{{color:#38bdf8;text-decoration:none}}</style></head>'
+            f'<body><div class="card"><div class="badge">Notice of Suspension</div><h1>{susp_title}</h1><p>{susp_msg}</p>'
+            f'<div class="reason"><strong>Notice:</strong> {reason} (Host: {primary_domain})</div>'
+            f'<div class="contact">Need help? Contact <a href="mailto:{susp_email}">{susp_email}</a> | Tel: {susp_phone}</div></div></body></html>'
+        )
+
+        ssl_block = ""
+        if has_ssl:
+            ssl_block = f"""
+# 2. HTTPS 503 Maintenance Landing Block
+server {{
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {domains};
+
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    error_page 503 @suspended_landing;
+
+    location / {{
+        return 503;
+    }}
+
+    location @suspended_landing {{
+        default_type text/html;
+        return 503 '{landing_html}';
+    }}
+}}
+"""
+
         return f"""# ========================================================
 # Nova Proxy Admin - SUSPENDED HOST CONFIGURATION
 # Domain(s): {domains}
@@ -789,6 +844,7 @@ def generate_nginx_config(host: ProxyHost, db: Session) -> str:
 # Status: HTTP 503 Service Temporarily Unavailable
 # ========================================================
 
+# 1. HTTP 503 Maintenance Landing Block
 server {{
     listen 80;
     listen [::]:80;
@@ -802,9 +858,10 @@ server {{
 
     location @suspended_landing {{
         default_type text/html;
-        return 503 '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{susp_title}</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:1.5rem;box-sizing:border-box}}.card{{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:540px;width:100%;padding:2.5rem;box-shadow:0 12px 40px rgba(0,0,0,0.6);text-align:center}}.badge{{display:inline-block;padding:0.35rem 0.85rem;border-radius:9999px;font-size:0.78rem;font-weight:700;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);margin-bottom:1.25rem;text-transform:uppercase;letter-spacing:0.05em}}h1{{font-size:1.6rem;font-weight:800;margin:0 0 1rem;color:#f8fafc}}p{{color:#94a3b8;font-size:0.95rem;line-height:1.6;margin:0 0 1.5rem}}.reason{{background:#0f172a;border-left:4px solid #f59e0b;padding:0.85rem 1rem;text-align:left;border-radius:6px;font-size:0.88rem;color:#cbd5e1;margin-bottom:1.5rem}}.contact{{font-size:0.84rem;color:#64748b;border-top:1px solid #334155;padding-top:1.25rem}}a{{color:#38bdf8;text-decoration:none}}</style></head><body><div class="card"><div class="badge">Notice of Suspension</div><h1>{susp_title}</h1><p>{susp_msg}</p><div class="reason"><strong>Notice:</strong> {reason} (Host: {primary_domain})</div><div class="contact">Need help? Contact <a href="mailto:{susp_email}">{susp_email}</a> | Tel: {susp_phone}</div></div></body></html>';
+        return 503 '{landing_html}';
     }}
 }}
+{ssl_block}
 """
 
     ws_block = ""
@@ -916,6 +973,128 @@ server {{
 }}
 """
     return config
+
+def find_host_nginx_config_file(domain_names: str) -> Optional[str]:
+    """Finds existing active or configured Nginx site file for domain on the Linux host."""
+    domains = [d.strip().lower() for d in domain_names.replace(",", " ").split() if d.strip()]
+    if not domains:
+        return None
+    primary_domain = domains[0]
+
+    search_dirs = ["/etc/nginx/sites-available", "/etc/nginx/sites-enabled", "/etc/nginx/conf.d"]
+    # 1. Match by exact filenames
+    for d in search_dirs:
+        if os.path.isdir(d):
+            for cand in [f"{primary_domain}.conf", primary_domain, f"site_{primary_domain}.conf", f"{primary_domain}-proxy.conf"]:
+                p = os.path.join(d, cand)
+                if os.path.isfile(p):
+                    return os.path.realpath(p)
+
+    # 2. Match by server_name inside files
+    for d in search_dirs:
+        if os.path.isdir(d):
+            try:
+                for fname in sorted(os.listdir(d)):
+                    p = os.path.join(d, fname)
+                    if os.path.isfile(p):
+                        try:
+                            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                                c = f.read()
+                            for dom in domains:
+                                if re.search(rf'server_name\s+[^;]*\b{re.escape(dom)}\b', c, re.IGNORECASE):
+                                    return os.path.realpath(p)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    return None
+
+def write_and_reload_nginx_host(host: ProxyHost, db: Session) -> dict:
+    """
+    Writes the active or suspended Nginx configuration for the given host
+    to the host filesystem and safely reloads Nginx.
+    """
+    if platform.system() != "Linux" or not os.path.isdir("/etc/nginx"):
+        return {"status": "skipped", "message": "Host system is not Linux or /etc/nginx is missing"}
+
+    domains = [d.strip().lower() for d in host.domain_names.replace(",", " ").split() if d.strip()]
+    primary_domain = domains[0] if domains else f"site_{host.id}"
+    safe_name = re.sub(r'[^a-zA-Z0-9_\.-]', '_', primary_domain)
+
+    target_path = find_host_nginx_config_file(host.domain_names)
+    is_new = False
+    if not target_path:
+        is_new = True
+        if os.path.isdir("/etc/nginx/sites-available"):
+            target_path = f"/etc/nginx/sites-available/{safe_name}.conf"
+        elif os.path.isdir("/etc/nginx/sites-enabled"):
+            target_path = f"/etc/nginx/sites-enabled/{safe_name}.conf"
+        elif os.path.isdir("/etc/nginx/conf.d"):
+            target_path = f"/etc/nginx/conf.d/{safe_name}.conf"
+        else:
+            return {"status": "error", "message": "Cannot determine Nginx sites configuration directory"}
+
+    conf_content = generate_nginx_config(host, db)
+    backup_path = target_path + ".bak_nova"
+
+    if os.path.isfile(target_path):
+        try:
+            shutil.copy2(target_path, backup_path)
+        except Exception:
+            pass
+
+    try:
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(conf_content)
+
+        # If written to sites-available, ensure enabled symlink in sites-enabled
+        if "/sites-available/" in target_path and os.path.isdir("/etc/nginx/sites-enabled"):
+            symlink_path = os.path.join("/etc/nginx/sites-enabled", os.path.basename(target_path))
+            if not os.path.exists(symlink_path) and not os.path.islink(symlink_path):
+                try:
+                    os.symlink(target_path, symlink_path)
+                except Exception as sym_err:
+                    print(f"Notice: Symlink creation for {symlink_path}: {sym_err}")
+
+        # Validate with nginx -t
+        t_res = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=8)
+        if t_res.returncode != 0:
+            if os.path.isfile(backup_path):
+                shutil.copy2(backup_path, target_path)
+            elif is_new and os.path.isfile(target_path):
+                try:
+                    os.remove(target_path)
+                except Exception:
+                    pass
+            return {
+                "status": "error",
+                "message": f"Nginx validation failed: {t_res.stderr or t_res.stdout}"
+            }
+
+        # Reload Nginx
+        r_res = subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, text=True, timeout=8)
+        if r_res.returncode != 0:
+            r_res = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True, timeout=8)
+
+        if os.path.isfile(backup_path):
+            try:
+                os.remove(backup_path)
+            except Exception:
+                pass
+
+        state_label = "Suspended (503 Page Active)" if host.is_suspended else "Active (Reverse Proxy Live)"
+        return {
+            "status": "success",
+            "message": f"{primary_domain} set to {state_label} and Nginx reloaded successfully",
+            "file": target_path
+        }
+    except Exception as e:
+        if os.path.isfile(backup_path):
+            try:
+                shutil.copy2(backup_path, target_path)
+            except Exception:
+                pass
+        return {"status": "error", "message": f"Failed applying Nginx configuration: {str(e)}"}
 
 # ---------------------------------------------------------
 # API Endpoints
@@ -1603,7 +1782,9 @@ def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Ses
     db.add(audit)
     db.commit()
 
-    return {"message": "Proxy host updated successfully"}
+    nginx_res = write_and_reload_nginx_host(host, db)
+
+    return {"message": "Proxy host updated successfully", "nginx_reload": nginx_res}
 
 @app.post("/api/hosts/{host_id}/toggle-suspend")
 def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = None, db: Session = Depends(get_db)):
@@ -1620,11 +1801,14 @@ def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = N
         host.suspended_reason = reason
     db.commit()
 
+    # Automatically write the active or suspended Nginx config and reload Nginx
+    nginx_res = write_and_reload_nginx_host(host, db)
+
     action_label = "SUSPENDED" if host.is_suspended else "ACTIVATED"
     client_ip = req.client.host if req.client else "127.0.0.1"
     audit = AuditLog(
         action=f"HOST_{action_label}",
-        details=f"Host #{host.id} '{host.domain_names}' changed to {action_label}. Reason: {host.suspended_reason}",
+        details=f"Host #{host.id} '{host.domain_names}' changed to {action_label}. Reason: {host.suspended_reason} (Nginx: {nginx_res.get('status', 'skipped')})",
         status="success",
         client_ip=client_ip
     )
@@ -1635,14 +1819,22 @@ def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = N
     send_smtp_notification(
         "suspension",
         f"Domain {action_label.capitalize()} Alert: {host.domain_names}",
-        f"Nova Proxy Host #{host.id} ({host.domain_names}) has been {action_label}.\nReason: {host.suspended_reason}\nTarget Upstream: {host.forward_scheme}://{host.forward_host}:{host.forward_port}\nExecuted by: {client_ip}",
+        f"Nova Proxy Host #{host.id} ({host.domain_names}) has been {action_label}.\nReason: {host.suspended_reason}\nTarget Upstream: {host.forward_scheme}://{host.forward_host}:{host.forward_port}\nNginx Status: {nginx_res.get('message', 'N/A')}\nExecuted by: {client_ip}",
         db
     )
 
+    status_txt = "Suspended (503 Page Active)" if host.is_suspended else "Active (Site Live)"
+    msg = f"Host #{host.id} is now {status_txt}"
+    if nginx_res.get("status") == "success":
+        msg += f" — Nginx configuration updated and reloaded on host."
+    elif nginx_res.get("status") == "error":
+        msg += f" — Warning: Nginx reload failed: {nginx_res.get('message')}"
+
     return {
-        "message": f"Host status updated to {'Suspended' if host.is_suspended else 'Active'}",
+        "message": msg,
         "is_suspended": host.is_suspended,
-        "suspended_reason": host.suspended_reason
+        "suspended_reason": host.suspended_reason,
+        "nginx_reload": nginx_res
     }
 
 @app.delete("/api/hosts/{host_id}")
@@ -1656,6 +1848,18 @@ def delete_proxy_host(host_id: int, req: Request, db: Session = Depends(get_db))
         raise HTTPException(status_code=404, detail="Proxy host not found")
 
     domain_label = host.domain_names
+    target_file = find_host_nginx_config_file(domain_label)
+    if target_file and os.path.isfile(target_file):
+        try:
+            os.remove(target_file)
+            sym = f"/etc/nginx/sites-enabled/{os.path.basename(target_file)}"
+            if os.path.islink(sym):
+                os.remove(sym)
+            subprocess.run(["nginx", "-t"], capture_output=True, timeout=5)
+            subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
     db.delete(host)
     db.commit()
 
@@ -2448,18 +2652,189 @@ def validate_ufw_ip(ip_str: str) -> str:
             detail=f"Invalid IP address or CIDR format: '{clean}'. Supported formats: IPv4 (e.g. 192.168.1.1, 10.0.0.0/24) and IPv6 (e.g. 2001:db8::1, 2001:db8::/32) or 'Anywhere'."
         )
 
+def build_ufw_command_args(action: str, rule: UFWRule) -> list[str]:
+    """
+    Builds exact valid UFW CLI arguments.
+    Supports:
+    - CIDR or host IP: ufw allow from 137.63.181.0/24 to any port 443
+    - Anywhere: ufw allow 443/tcp or ufw allow 443
+    - Protocols: tcp, udp, or any (omits proto flag)
+    - Actions: 'add' (allow/deny/...) or 'delete'
+    """
+    cmd = ["ufw"]
+    act_type = rule.rule_type.lower()
+
+    if action == "delete":
+        cmd.append("delete")
+    cmd.append(act_type)
+
+    from_ip = (rule.from_ip or "").strip()
+    is_anywhere = from_ip.lower() in ["anywhere", "any", "all", "0.0.0.0/0", "::/0", ""]
+    has_port = rule.port and str(rule.port).strip().lower() not in ["any", "all", ""]
+    proto = (rule.protocol or "any").lower().strip()
+
+    if not is_anywhere:
+        # e.g. from 137.63.181.0/24 to any port 443
+        cmd.extend(["from", from_ip])
+        if has_port:
+            cmd.extend(["to", "any", "port", str(rule.port).strip()])
+        if proto in ["tcp", "udp"]:
+            cmd.extend(["proto", proto])
+    else:
+        # Source is Anywhere
+        if has_port:
+            if proto in ["tcp", "udp"]:
+                cmd.append(f"{str(rule.port).strip()}/{proto}")
+            else:
+                cmd.extend(["to", "any", "port", str(rule.port).strip()])
+        elif proto in ["tcp", "udp"]:
+            cmd.extend(["proto", proto])
+
+    return cmd
+
 def sync_host_firewall_rule(action: str, rule: UFWRule):
-    """Executes host firewall command (ufw / pfctl) if present on operating system."""
+    """Executes host firewall command (ufw) if present on operating system."""
     try:
         if subprocess.call(["which", "ufw"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
-            cmd = ["ufw"]
-            if action == "add":
-                cmd.extend([rule.rule_type.lower(), "from", rule.from_ip, "to", "any", "port", str(rule.port), "proto", rule.protocol.lower()])
-            elif action == "delete":
-                cmd.extend(["delete", rule.rule_type.lower(), "from", rule.from_ip, "to", "any", "port", str(rule.port), "proto", rule.protocol.lower()])
-            subprocess.run(cmd, capture_output=True, timeout=5)
+            cmd = build_ufw_command_args(action, rule)
+            subprocess.run(cmd, capture_output=True, timeout=8)
     except Exception as e:
         print(f"Notice: Host firewall synchronization: {e}")
+
+def parse_ufw_command(command_str: str) -> dict:
+    """
+    Parses a raw UFW command string (e.g. 'ufw allow from 137.63.181.0/24 to any port 443').
+    Extracts rule_type, from_ip, port, protocol, and comment.
+    """
+    s = command_str.strip()
+    s = re.sub(r'^\s*ufw\s+', '', s, flags=re.IGNORECASE)
+
+    comment = None
+    comm_match = re.search(r'(?:comment\s+["\']([^"\']+)["\']|#\s*(.*)$)', s, re.IGNORECASE)
+    if comm_match:
+        comment = (comm_match.group(1) or comm_match.group(2) or "").strip()
+        s = re.sub(r'(?:comment\s+["\'][^"\']+["\']|#\s*.*$)', '', s, flags=re.IGNORECASE).strip()
+
+    action_match = re.match(r'^(allow|deny|reject|limit)\b', s, re.IGNORECASE)
+    if not action_match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid UFW command syntax: must start with allow, deny, reject, or limit (e.g. 'ufw allow from 137.63.181.0/24 to any port 443')"
+        )
+
+    rule_type = action_match.group(1).upper()
+    rest = s[action_match.end():].strip()
+
+    from_ip = "Anywhere"
+    from_match = re.search(r'\bfrom\s+([^\s]+)', rest, re.IGNORECASE)
+    if from_match:
+        from_ip = from_match.group(1).strip()
+
+    port = "Any"
+    proto = "any"
+    port_match = re.search(r'\bport\s+([0-9a-zA-Z_\-]+)', rest, re.IGNORECASE)
+    if port_match:
+        port = port_match.group(1).strip()
+    else:
+        simple_match = re.search(r'\b(\d+)(?:/(tcp|udp))?\b', rest, re.IGNORECASE)
+        if simple_match:
+            port = simple_match.group(1).strip()
+            if simple_match.group(2):
+                proto = simple_match.group(2).lower().strip()
+
+    proto_match = re.search(r'\bproto\s+(tcp|udp)\b', rest, re.IGNORECASE)
+    if proto_match:
+        proto = proto_match.group(1).lower().strip()
+
+    validated_ip = validate_ufw_ip(from_ip)
+
+    return {
+        "rule_type": rule_type,
+        "from_ip": validated_ip,
+        "port": port,
+        "protocol": proto,
+        "comment": comment
+    }
+
+class UFWCommandRequest(BaseModel):
+    command: str
+    comment: Optional[str] = None
+
+@app.post("/api/ufw/execute-command")
+def execute_ufw_command(data: UFWCommandRequest, req: Request, db: Session = Depends(get_db)):
+    """
+    Parses and executes a raw UFW command (e.g. 'ufw allow from 137.63.181.0/24 to any port 443').
+    Applies rule directly to Linux host UFW firewall and records it in database.
+    """
+    verify_super_admin(req)
+    parsed = parse_ufw_command(data.command)
+    comment = data.comment or parsed.get("comment") or "Applied via UFW Command Bar"
+
+    rule = UFWRule(
+        rule_type=parsed["rule_type"],
+        port=parsed["port"],
+        protocol=parsed["protocol"],
+        from_ip=parsed["from_ip"],
+        to_ip="Anywhere",
+        comment=comment,
+        is_active=True
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+
+    cmd_args = build_ufw_command_args("add", rule)
+    raw_output = ""
+    success = True
+
+    try:
+        if subprocess.call(["which", "ufw"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+            res = subprocess.run(cmd_args, capture_output=True, text=True, timeout=10)
+            raw_output = res.stdout.strip() or res.stderr.strip()
+            if res.returncode != 0:
+                success = False
+                rule.is_active = False
+                db.commit()
+                raise HTTPException(status_code=400, detail=f"UFW execution error: {raw_output}")
+        else:
+            raw_output = f"Rule saved (ufw binary not present on {platform.system()})"
+    except HTTPException:
+        raise
+    except Exception as e:
+        raw_output = f"Notice: {str(e)}"
+
+    cmd_str = " ".join(cmd_args)
+    client_ip = req.client.host if req.client else "127.0.0.1"
+    audit = AuditLog(
+        action="UFW_CLI_EXECUTE",
+        details=f"Executed firewall command: '{cmd_str}' -> {parsed['rule_type']} from {parsed['from_ip']} to port {parsed['port']}",
+        status="success" if success else "failed",
+        client_ip=client_ip
+    )
+    db.add(audit)
+    db.commit()
+
+    send_smtp_notification(
+        "ufw",
+        f"Firewall Rule #{rule.id} Applied via CLI",
+        f"UFW command executed:\n\n{cmd_str}\n\nRule ID: #{rule.id}\nAction: {rule.rule_type}\nSource: {rule.from_ip}\nPort: {rule.port}\nOutput: {raw_output}\nOperator IP: {client_ip}",
+        db
+    )
+
+    return {
+        "status": "success",
+        "message": f"Firewall rule #{rule.id} successfully applied: {cmd_str}",
+        "command": cmd_str,
+        "raw_output": raw_output,
+        "rule": {
+            "id": rule.id,
+            "rule_type": rule.rule_type,
+            "port": rule.port,
+            "protocol": rule.protocol,
+            "from_ip": rule.from_ip,
+            "comment": rule.comment
+        }
+    }
 
 @app.get("/api/ufw/rules")
 def get_ufw_rules(db: Session = Depends(get_db)):

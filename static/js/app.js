@@ -1159,7 +1159,10 @@ document.addEventListener('DOMContentLoaded', () => {
           <td><span class="ufw-badge ${badgeClass}">${escapeHtml(r.rule_type)}</span></td>
           <td><strong>${escapeHtml(r.port)}</strong></td>
           <td style="font-family: var(--font-primary); font-size: 0.8rem; text-transform: uppercase;">${escapeHtml(r.protocol)}</td>
-          <td style="font-family: var(--font-primary); font-size: 0.82rem; color: var(--secondary);">${escapeHtml(r.from_ip)}</td>
+          <td>
+            <span style="font-family: monospace; font-size: 0.84rem; color: var(--secondary); font-weight: 600;">${escapeHtml(r.from_ip)}</span>
+            ${r.from_ip && r.from_ip.includes('/') ? '<span style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 4px; padding: 0.1rem 0.35rem; margin-left: 0.35rem; font-weight: 600;">CIDR Subnet</span>' : (r.from_ip && r.from_ip.toLowerCase() !== 'anywhere' ? '<span style="font-size: 0.68rem; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 4px; padding: 0.1rem 0.35rem; margin-left: 0.35rem; font-weight: 600;">Host IP</span>' : '')}
+          </td>
           <td>${escapeHtml(r.comment)}</td>
           <td>
             <label class="switch" title="Toggle rule active/inactive">
@@ -1206,6 +1209,41 @@ document.addEventListener('DOMContentLoaded', () => {
   const ufwModal = document.getElementById('ufw-modal');
   const ufwForm = document.getElementById('ufw-form');
 
+  function updateUfwModalPreview() {
+    const ruleType = (document.getElementById('ufw-rule-type')?.value || 'ALLOW').toLowerCase();
+    const port = (document.getElementById('ufw-port')?.value || '80').trim();
+    const proto = (document.getElementById('ufw-protocol')?.value || 'tcp').toLowerCase();
+    const fromIp = (document.getElementById('ufw-source-ip')?.value || 'Anywhere').trim();
+    const previewEl = document.getElementById('ufw-live-command-preview');
+    if (!previewEl) return;
+
+    let cmd = `ufw ${ruleType}`;
+    const isAnywhere = !fromIp || ['anywhere', 'any', 'all', '0.0.0.0/0', '::/0'].includes(fromIp.toLowerCase());
+    const hasPort = port && !['any', 'all'].includes(port.toLowerCase());
+
+    if (!isAnywhere) {
+      cmd += ` from ${fromIp}`;
+      if (hasPort) cmd += ` to any port ${port}`;
+      if (proto === 'tcp' || proto === 'udp') cmd += ` proto ${proto}`;
+    } else {
+      if (hasPort) {
+        if (proto === 'tcp' || proto === 'udp') cmd += ` ${port}/${proto}`;
+        else cmd += ` to any port ${port}`;
+      } else if (proto === 'tcp' || proto === 'udp') {
+        cmd += ` proto ${proto}`;
+      }
+    }
+    previewEl.textContent = cmd;
+  }
+
+  ['ufw-rule-type', 'ufw-port', 'ufw-protocol', 'ufw-source-ip'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', updateUfwModalPreview);
+      el.addEventListener('change', updateUfwModalPreview);
+    }
+  });
+
   window.openEditUfwModal = function(id) {
     if (activeRole !== 'super_admin') {
       showToast('Permission denied: Only Super Admin can manage UFW', 'error');
@@ -1225,6 +1263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('ufw-protocol').value = rule.protocol;
     document.getElementById('ufw-source-ip').value = rule.from_ip;
     document.getElementById('ufw-comment').value = rule.comment || '';
+    updateUfwModalPreview();
     ufwModal.classList.add('open');
   };
 
@@ -1242,6 +1281,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('ufw-port').value = '80';
     document.getElementById('ufw-protocol').value = 'tcp';
     document.getElementById('ufw-source-ip').value = 'Anywhere';
+    updateUfwModalPreview();
     ufwModal.classList.add('open');
   });
 
@@ -1284,6 +1324,63 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       showToast('Error saving UFW rule', 'error');
     }
+  });
+
+  // Direct UFW CLI & CIDR Command Runner Console
+  const quickUfwForm = document.getElementById('form-ufw-quick-cmd');
+  if (quickUfwForm) {
+    quickUfwForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (activeRole !== 'super_admin') {
+        showToast('Permission denied: Only Super Admin can manage firewall', 'error');
+        return;
+      }
+      const cmdInput = document.getElementById('input-ufw-cli-cmd');
+      const rawCmd = cmdInput ? cmdInput.value.trim() : '';
+      if (!rawCmd) return;
+
+      const btn = document.getElementById('btn-submit-quick-ufw');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>Applying...</span>';
+      }
+
+      try {
+        const res = await fetch('/api/ufw/execute-command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: rawCmd })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(data.detail || 'Failed to apply UFW command', 'error');
+        } else {
+          showToast(data.message || 'Firewall rule applied successfully', 'success');
+          loadUfwRules();
+          loadSystemStatus();
+        }
+      } catch (err) {
+        showToast('Network error applying firewall command', 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>Apply to Firewall</span>';
+        }
+      }
+    });
+  }
+
+  // Quick Preset Badges for UFW Command Runner
+  document.querySelectorAll('.ufw-example-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      const cmd = pill.getAttribute('data-cmd');
+      const input = document.getElementById('input-ufw-cli-cmd');
+      if (input && cmd) {
+        input.value = cmd;
+        input.focus();
+        showToast(`Loaded example: ${cmd}`);
+      }
+    });
   });
 
   window.toggleUfwRule = async function(id) {
