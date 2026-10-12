@@ -198,57 +198,73 @@ def auto_migrate_schema():
     """Automatically adds missing columns to existing MySQL tables without losing data."""
     try:
         with engine.connect() as conn:
+            def safe_add_column(table: str, col_name: str, col_def: str):
+                try:
+                    cols = {row[0] for row in conn.execute(text(f"SHOW COLUMNS FROM `{table}`")).fetchall()}
+                    if col_name not in cols:
+                        conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{col_name}` {col_def}"))
+                        conn.commit()
+                except Exception as ex:
+                    print(f"Notice: Migrating {table}.{col_name}: {ex}")
+
             existing_tables = {t[0] for t in conn.execute(text("SHOW TABLES")).fetchall()}
 
             # 1. users table
             if "users" in existing_tables:
-                user_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM users")).fetchall()}
-                if "full_name" not in user_cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(150) NOT NULL DEFAULT 'Administrator' AFTER username"))
-                if "allowed_domains" not in user_cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN allowed_domains TEXT NULL AFTER role"))
-                if "is_active" not in user_cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER allowed_domains"))
-                if "password_hash" not in user_cols and "password" in user_cols:
-                    conn.execute(text("ALTER TABLE users CHANGE COLUMN password password_hash VARCHAR(255) NOT NULL"))
+                safe_add_column("users", "full_name", "VARCHAR(150) NOT NULL DEFAULT 'Administrator'")
+                safe_add_column("users", "email", "VARCHAR(150) NULL")
+                safe_add_column("users", "role", "VARCHAR(50) NOT NULL DEFAULT 'super_admin'")
+                safe_add_column("users", "allowed_domains", "TEXT NULL")
+                safe_add_column("users", "is_active", "TINYINT(1) NOT NULL DEFAULT 1")
+                safe_add_column("users", "created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP")
+                # Fix password vs password_hash
+                try:
+                    user_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM users")).fetchall()}
+                    if "password_hash" not in user_cols and "password" in user_cols:
+                        conn.execute(text("ALTER TABLE users CHANGE COLUMN password password_hash VARCHAR(255) NOT NULL"))
+                        conn.commit()
+                except Exception:
+                    pass
 
             # 2. proxy_hosts table
             if "proxy_hosts" in existing_tables:
-                host_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM proxy_hosts")).fetchall()}
-                if "app_name" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN app_name VARCHAR(150) DEFAULT 'Web Application' AFTER domain_names"))
-                if "suspended_reason" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN suspended_reason VARCHAR(255) DEFAULT 'Administrative Policy Suspension' AFTER is_suspended"))
-                if "custom_nginx_config" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN custom_nginx_config TEXT NULL AFTER suspended_reason"))
-                if "websocket_support" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN websocket_support TINYINT(1) NOT NULL DEFAULT 1"))
-                if "block_exploits" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN block_exploits TINYINT(1) NOT NULL DEFAULT 1"))
-                if "ssl_forced" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_forced TINYINT(1) NOT NULL DEFAULT 1"))
-                if "ssl_provider" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_provider VARCHAR(50) NOT NULL DEFAULT 'Let\\'s Encrypt'"))
-                if "ssl_status" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_status VARCHAR(50) NOT NULL DEFAULT 'active'"))
-                if "ssl_expires_at" not in host_cols:
-                    conn.execute(text("ALTER TABLE proxy_hosts ADD COLUMN ssl_expires_at DATE NULL"))
+                safe_add_column("proxy_hosts", "app_name", "VARCHAR(150) DEFAULT 'Web Application'")
+                safe_add_column("proxy_hosts", "forward_scheme", "VARCHAR(10) NOT NULL DEFAULT 'http'")
+                safe_add_column("proxy_hosts", "forward_host", "VARCHAR(255) NOT NULL DEFAULT '127.0.0.1'")
+                safe_add_column("proxy_hosts", "forward_port", "INT NOT NULL DEFAULT 8080")
+                safe_add_column("proxy_hosts", "websocket_support", "TINYINT(1) NOT NULL DEFAULT 1")
+                safe_add_column("proxy_hosts", "block_exploits", "TINYINT(1) NOT NULL DEFAULT 1")
+                safe_add_column("proxy_hosts", "ssl_forced", "TINYINT(1) NOT NULL DEFAULT 1")
+                safe_add_column("proxy_hosts", "ssl_provider", "VARCHAR(50) NOT NULL DEFAULT 'Let\\'s Encrypt'")
+                safe_add_column("proxy_hosts", "ssl_status", "VARCHAR(50) NOT NULL DEFAULT 'active'")
+                safe_add_column("proxy_hosts", "ssl_expires_at", "DATE NULL")
+                safe_add_column("proxy_hosts", "is_suspended", "TINYINT(1) NOT NULL DEFAULT 0")
+                safe_add_column("proxy_hosts", "suspended_reason", "VARCHAR(255) DEFAULT 'Administrative Policy Suspension'")
+                safe_add_column("proxy_hosts", "custom_nginx_config", "TEXT NULL")
+                safe_add_column("proxy_hosts", "created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP")
+                safe_add_column("proxy_hosts", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
 
             # 3. certificates table
             if "certificates" in existing_tables:
-                cert_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM certificates")).fetchall()}
-                if "domain_registered_at" not in cert_cols:
-                    conn.execute(text("ALTER TABLE certificates ADD COLUMN domain_registered_at DATE NULL"))
-                if "domain_expires_at" not in cert_cols:
-                    conn.execute(text("ALTER TABLE certificates ADD COLUMN domain_expires_at DATE NULL"))
+                safe_add_column("certificates", "domain_registered_at", "DATE NULL")
+                safe_add_column("certificates", "domain_expires_at", "DATE NULL")
+                safe_add_column("certificates", "auto_renew", "TINYINT(1) NOT NULL DEFAULT 1")
+                safe_add_column("certificates", "cert_path", "VARCHAR(255) DEFAULT '/etc/letsencrypt/live'")
 
             # 4. ufw_rules table
             if "ufw_rules" in existing_tables:
-                ufw_cols = {row[0] for row in conn.execute(text("SHOW COLUMNS FROM ufw_rules")).fetchall()}
-                if "to_ip" not in ufw_cols:
-                    conn.execute(text("ALTER TABLE ufw_rules ADD COLUMN to_ip VARCHAR(50) DEFAULT 'Anywhere'"))
+                safe_add_column("ufw_rules", "to_ip", "VARCHAR(50) DEFAULT 'Anywhere'")
+                safe_add_column("ufw_rules", "comment", "VARCHAR(255) NULL")
+                safe_add_column("ufw_rules", "is_active", "TINYINT(1) NOT NULL DEFAULT 1")
 
-            conn.commit()
+            # 5. web_traffic_logs table
+            if "web_traffic_logs" in existing_tables:
+                safe_add_column("web_traffic_logs", "user_agent", "TEXT NULL")
+                safe_add_column("web_traffic_logs", "response_time_ms", "FLOAT DEFAULT 0.0")
+
+            # 6. audit_logs table
+            if "audit_logs" in existing_tables:
+                safe_add_column("audit_logs", "client_ip", "VARCHAR(50) DEFAULT '127.0.0.1'")
     except Exception as e:
         print(f"Notice: Auto schema migration check: {e}")
 
