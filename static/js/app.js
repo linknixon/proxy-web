@@ -1754,6 +1754,104 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // -----------------------------------------------------
+  // Host Auto-Sync Handlers (/etc/nginx and Live UFW)
+  // -----------------------------------------------------
+  const btnAutoSyncNginx = document.getElementById('btn-auto-sync-nginx');
+  if (btnAutoSyncNginx) {
+    btnAutoSyncNginx.addEventListener('click', async () => {
+      if (activeRole !== 'super_admin') {
+        showToast('Permission denied: Only Super Admin can sync host configurations.', 'error');
+        return;
+      }
+      const originalText = btnAutoSyncNginx.innerHTML;
+      btnAutoSyncNginx.disabled = true;
+      btnAutoSyncNginx.textContent = 'Scanning /etc/nginx...';
+      try {
+        const res = await fetch('/api/nginx/auto-sync', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'X-User-Role': activeRole
+          }
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`Successfully synced ${data.synced} Nginx virtual host(s) from host!`, 'success');
+          loadHosts();
+        } else {
+          showToast(data.message || 'No active Nginx configs detected in /etc/nginx', 'warning');
+        }
+      } catch (err) {
+        showToast('Error syncing Nginx configs from host', 'error');
+      } finally {
+        btnAutoSyncNginx.disabled = false;
+        btnAutoSyncNginx.innerHTML = originalText;
+      }
+    });
+  }
+
+  const btnClearDemoHosts = document.getElementById('btn-clear-demo-hosts');
+  if (btnClearDemoHosts) {
+    btnClearDemoHosts.addEventListener('click', async () => {
+      if (activeRole !== 'super_admin') {
+        showToast('Permission denied: Only Super Admin can manage host inventory.', 'error');
+        return;
+      }
+      if (!confirm('Are you sure you want to remove development demo hosts (api.novacloud.io, portal.novacloudedges.com, etc.)?')) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/nginx/clear-demo-hosts', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'X-User-Role': activeRole
+          }
+        });
+        const data = await res.json();
+        showToast(data.message || 'Cleared demo hosts', 'success');
+        loadHosts();
+      } catch (err) {
+        showToast('Failed to clear demo hosts', 'error');
+      }
+    });
+  }
+
+  const btnSyncHostUfw = document.getElementById('btn-sync-host-ufw');
+  if (btnSyncHostUfw) {
+    btnSyncHostUfw.addEventListener('click', async () => {
+      if (activeRole !== 'super_admin') {
+        showToast('Permission denied: Only Super Admin can manage UFW.', 'error');
+        return;
+      }
+      const originalText = btnSyncHostUfw.innerHTML;
+      btnSyncHostUfw.disabled = true;
+      btnSyncHostUfw.textContent = 'Syncing UFW...';
+      try {
+        const res = await fetch('/api/ufw/auto-sync', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'X-User-Role': activeRole
+          }
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`Successfully synchronized ${data.synced} live UFW rules from host!`, 'success');
+          loadUfwRules();
+        } else {
+          showToast(data.message || 'UFW status not active or empty', 'warning');
+        }
+      } catch (err) {
+        showToast('Error syncing live UFW rules', 'error');
+      } finally {
+        btnSyncHostUfw.disabled = false;
+        btnSyncHostUfw.innerHTML = originalText;
+      }
+    });
+  }
+
+  // -----------------------------------------------------
   // Security Role: WHOIS & Abuse Reporting
   // -----------------------------------------------------
   document.getElementById('btn-run-whois').addEventListener('click', async () => {

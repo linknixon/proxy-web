@@ -28,19 +28,47 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # ---------------------------------------------------------
-# Database Configuration (MAMP MySQL)
+# Database Configuration (Multi-Platform: Linux MySQL & macOS MAMP)
 # ---------------------------------------------------------
+IS_LINUX = platform.system() == "Linux"
 MAMP_SOCKET = "/Applications/MAMP/tmp/mysql/mysql.sock"
+LINUX_SOCKET = "/var/run/mysqld/mysqld.sock"
+
 DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "root")
+DB_PASS = os.getenv("DB_PASS", "" if IS_LINUX else "root")
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "8889")
+DB_PORT = os.getenv("DB_PORT", "3306" if IS_LINUX else "8889")
 DB_NAME = os.getenv("DB_NAME", "proxy_manager")
 
 if os.path.exists(MAMP_SOCKET):
     DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}?unix_socket={MAMP_SOCKET}"
+elif IS_LINUX and os.path.exists(LINUX_SOCKET) and DB_HOST in ["127.0.0.1", "localhost"]:
+    if DB_PASS:
+        DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}?unix_socket={LINUX_SOCKET}"
+    else:
+        DATABASE_URL = f"mysql+pymysql://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}?unix_socket={LINUX_SOCKET}"
 else:
-    DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    if DB_PASS:
+        DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    else:
+        DATABASE_URL = f"mysql+pymysql://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+def ensure_database_exists():
+    try:
+        if os.path.exists(MAMP_SOCKET):
+            root_url = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/?unix_socket={MAMP_SOCKET}"
+        elif IS_LINUX and os.path.exists(LINUX_SOCKET) and DB_HOST in ["127.0.0.1", "localhost"]:
+            root_url = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/?unix_socket={LINUX_SOCKET}" if DB_PASS else f"mysql+pymysql://{DB_USER}@{DB_HOST}:{DB_PORT}/?unix_socket={LINUX_SOCKET}"
+        else:
+            root_url = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/" if DB_PASS else f"mysql+pymysql://{DB_USER}@{DB_HOST}:{DB_PORT}/"
+        tmp_eng = create_engine(root_url, connect_args={"connect_timeout": 3})
+        with tmp_eng.connect() as conn:
+            conn.execute(text(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+            conn.commit()
+    except Exception as e:
+        print(f"Notice: Database existence verification: {e}")
+
+ensure_database_exists()
 
 engine = create_engine(
     DATABASE_URL,
@@ -343,7 +371,17 @@ def get_system_metrics():
             os_display = f"macOS Darwin {sys_release} ({sys_machine})"
             os_family = "macOS"
         elif sys_name == "Linux":
-            os_display = f"Linux {sys_release} ({sys_machine})"
+            distro_name = ""
+            if os.path.exists("/etc/os-release"):
+                try:
+                    with open("/etc/os-release", "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            if line.startswith("PRETTY_NAME="):
+                                distro_name = line.split("=", 1)[1].strip().strip('"').strip("'")
+                                break
+                except Exception:
+                    pass
+            os_display = f"{distro_name} ({sys_machine})" if distro_name else f"Linux {sys_release} ({sys_machine})"
             os_family = "Linux"
         elif sys_name == "Windows":
             os_display = f"Windows {sys_release} ({sys_machine})"
@@ -1898,6 +1936,231 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
         "imported_count": len(imported),
         "imported_domains": imported
     }
+
+# ---------------------------------------------------------
+# Host Nginx & UFW Auto-Discovery / Auto-Sync
+# ---------------------------------------------------------
+def scan_host_nginx_configs() -> list:
+    """
+    Scans host Linux system for real Nginx configuration files across standard directories:
+    /etc/nginx/sites-enabled/, /etc/nginx/sites-available/, /etc/nginx/conf.d/, /usr/local/nginx/conf/
+    Returns parsed configurations.
+    """
+    search_dirs = [
+        "/etc/nginx/sites-enabled",
+        "/etc/nginx/sites-available",
+        "/etc/nginx/conf.d",
+        "/usr/local/nginx/conf/sites-enabled",
+        "/usr/local/nginx/conf/conf.d"
+    ]
+    found_files = []
+    for d in search_dirs:
+        if os.path.isdir(d):
+            try:
+                for entry in sorted(os.listdir(d)):
+                    full_p = os.path.join(d, entry)
+                    if os.path.isfile(full_p):
+                        real_p = os.path.realpath(full_p)
+                        if real_p not in found_files:
+                            found_files.append(real_p)
+            except Exception as e:
+                print(f"Notice: Reading Nginx directory {d}: {e}")
+
+    results = []
+    for fpath in found_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            if "server" not in content.lower():
+                continue
+
+            parts = re.split(r'\bserver\s*\{', content, flags=re.IGNORECASE)
+            server_blocks = [p for p in parts if "server_name" in p or "proxy_pass" in p]
+            if not server_blocks:
+                server_blocks = [content]
+
+            for block in server_blocks:
+                parsed = parse_nginx_server_block(block)
+                doms = [d.strip() for d in parsed["domain_names"].split(",") if d.strip() and d.strip() not in ["_", "localhost", "imported-host.local"]]
+                if not doms:
+                    continue
+
+                ssl_cert_match = re.search(r'ssl_certificate\s+([^;]+);', block)
+                ssl_provider = "Let's Encrypt" if (ssl_cert_match and "letsencrypt" in ssl_cert_match.group(1).lower()) else ("Self-Signed" if parsed["ssl_forced"] else "None")
+
+                results.append({
+                    "file_path": fpath,
+                    "domain_names": ", ".join(doms),
+                    "forward_scheme": parsed["forward_scheme"],
+                    "forward_host": parsed["forward_host"],
+                    "forward_port": parsed["forward_port"],
+                    "websocket_support": parsed["websocket_support"],
+                    "block_exploits": parsed["block_exploits"],
+                    "ssl_forced": parsed["ssl_forced"],
+                    "ssl_provider": ssl_provider,
+                    "custom_nginx_config": block.strip()
+                })
+        except Exception as e:
+            print(f"Notice: Parsing {fpath}: {e}")
+
+    return results
+
+def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> dict:
+    discovered = scan_host_nginx_configs()
+    if not discovered:
+        return {"status": "skipped", "message": "No active Nginx configuration files found in /etc/nginx.", "synced": 0}
+
+    demo_domains = ["api.novacloud.io", "portal.novacloudedges.com", "staging.gisunika.org", "migration-test.ncloud.io", "sun.ac.ug"]
+    if force_replace_demo:
+        for dd in demo_domains:
+            db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{dd}%")).delete(synchronize_session=False)
+        db.commit()
+
+    synced_count = 0
+    created_count = 0
+    updated_count = 0
+
+    for item in discovered:
+        primary_domain = item["domain_names"].split(",")[0].strip()
+        existing = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{primary_domain}%")).first()
+
+        if existing:
+            existing.forward_scheme = item["forward_scheme"]
+            existing.forward_host = item["forward_host"]
+            existing.forward_port = item["forward_port"]
+            existing.websocket_support = item["websocket_support"]
+            existing.block_exploits = item["block_exploits"]
+            existing.ssl_forced = item["ssl_forced"]
+            existing.ssl_provider = item["ssl_provider"]
+            existing.custom_nginx_config = item["custom_nginx_config"]
+            updated_count += 1
+        else:
+            new_host = ProxyHost(
+                domain_names=item["domain_names"],
+                app_name="Host Nginx VirtualHost",
+                forward_scheme=item["forward_scheme"],
+                forward_host=item["forward_host"],
+                forward_port=item["forward_port"],
+                websocket_support=item["websocket_support"],
+                block_exploits=item["block_exploits"],
+                ssl_forced=item["ssl_forced"],
+                ssl_provider=item["ssl_provider"],
+                ssl_status="active" if item["ssl_forced"] else "disabled",
+                ssl_expires_at=datetime.date.today() + datetime.timedelta(days=90) if item["ssl_forced"] else None,
+                is_suspended=False,
+                custom_nginx_config=item["custom_nginx_config"]
+            )
+            db.add(new_host)
+            created_count += 1
+        synced_count += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "synced": synced_count,
+        "created": created_count,
+        "updated": updated_count,
+        "discovered": [h["domain_names"] for h in discovered]
+    }
+
+def sync_host_ufw_into_db(db: Session) -> dict:
+    """Parses live ufw status numbered from the Linux OS and synchronizes with UFWRule table."""
+    try:
+        res = subprocess.run(["ufw", "status", "numbered"], capture_output=True, text=True, timeout=5)
+        if res.returncode != 0 or not res.stdout.strip():
+            return {"status": "unavailable", "message": "UFW not active or permission denied", "synced": 0}
+
+        lines = res.stdout.splitlines()
+        rule_pattern = re.compile(r'\[\s*(\d+)\]\s+([^\s]+)\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+IN)?\s+([^\s#]+)(?:\s+#\s*(.*))?', re.IGNORECASE)
+
+        parsed_rules = []
+        for line in lines:
+            m = rule_pattern.search(line)
+            if m:
+                target = m.group(2).strip()
+                action = m.group(3).strip().upper()
+                source = m.group(4).strip()
+                comment = (m.group(5) or "").strip()
+
+                port = "Any"
+                proto = "tcp"
+                if "/" in target:
+                    parts = target.split("/")
+                    port = parts[0]
+                    proto = parts[1]
+                else:
+                    port = target
+
+                parsed_rules.append({
+                    "port": port,
+                    "protocol": proto,
+                    "rule_type": action,
+                    "from_ip": source,
+                    "to_ip": "Anywhere",
+                    "comment": comment
+                })
+
+        if not parsed_rules:
+            return {"status": "empty", "message": "No active numbered rules found in UFW", "synced": 0}
+
+        db.query(UFWRule).delete()
+        for r in parsed_rules:
+            db.add(UFWRule(
+                rule_type=r["rule_type"],
+                port=r["port"],
+                protocol=r["protocol"],
+                from_ip=r["from_ip"],
+                to_ip=r["to_ip"],
+                comment=r["comment"] if r["comment"] else "Live Host UFW rule",
+                is_active=True
+            ))
+        db.commit()
+        return {"status": "success", "synced": len(parsed_rules), "rules": parsed_rules}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "synced": 0}
+
+@app.post("/api/nginx/auto-sync")
+def api_sync_host_nginx(req: Request, replace_demo: bool = False, db: Session = Depends(get_db)):
+    """Auto-detects and synchronizes real virtual host configs from host /etc/nginx."""
+    verify_super_admin(req)
+    result = sync_host_nginx_into_db(db, force_replace_demo=replace_demo)
+    return result
+
+@app.post("/api/nginx/clear-demo-hosts")
+def api_clear_demo_hosts(req: Request, db: Session = Depends(get_db)):
+    """Removes development dummy seed hosts (api.novacloud.io, 127.0.0.1:8000, etc.) from database."""
+    verify_super_admin(req)
+    demo_domains = ["api.novacloud.io", "portal.novacloudedges.com", "staging.gisunika.org", "migration-test.ncloud.io", "sun.ac.ug"]
+    deleted = 0
+    for dd in demo_domains:
+        cnt = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{dd}%")).delete(synchronize_session=False)
+        deleted += cnt
+    db.commit()
+    return {"message": f"Successfully removed {deleted} demo hosts from database."}
+
+@app.post("/api/ufw/auto-sync")
+def api_sync_host_ufw(req: Request, db: Session = Depends(get_db)):
+    """Auto-detects and synchronizes real live firewall rules from host UFW CLI."""
+    verify_super_admin(req)
+    result = sync_host_ufw_into_db(db)
+    return result
+
+@app.on_event("startup")
+def on_app_startup():
+    """Auto-syncs live host Nginx and UFW configuration on Linux server startup."""
+    try:
+        if platform.system() == "Linux" and os.path.isdir("/etc/nginx"):
+            db = SessionLocal()
+            try:
+                cnt = db.query(ProxyHost).count()
+                demo_cnt = db.query(ProxyHost).filter(ProxyHost.domain_names.like("%novacloud.io%")).count()
+                if cnt == 0 or demo_cnt == cnt:
+                    sync_host_nginx_into_db(db, force_replace_demo=True)
+                sync_host_ufw_into_db(db)
+            finally:
+                db.close()
+    except Exception as e:
+        print(f"Notice: Server startup auto-sync: {e}")
 
 @app.post("/api/validate-nginx")
 def validate_nginx_config(payload: NginxValidationRequest):

@@ -426,6 +426,16 @@
               Import / Migrate (.conf)
             </button>
 
+            <button class="btn-secondary" id="btn-auto-sync-nginx" title="Auto-detect & sync real Nginx virtual hosts from /etc/nginx on host">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Sync from /etc/nginx
+            </button>
+
+            <button class="btn-secondary" id="btn-clear-demo-hosts" title="Remove development dummy hosts from database">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Clear Demo Hosts
+            </button>
+
             <button class="btn-primary" id="btn-open-create-modal">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
               Add Proxy Host
@@ -477,10 +487,16 @@
             <h3 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 0.2rem;">UFW Firewall & WAF Rules</h3>
             <p style="font-size: 0.8rem; color: var(--text-muted);">Ubuntu 22.04 LTS packet filtering, port security, and IP drop list</p>
           </div>
-          <button class="btn-primary" id="btn-open-ufw-modal">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
-            Add Firewall Rule
-          </button>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn-secondary" id="btn-sync-host-ufw" title="Auto-detect and sync live rules from host ufw status">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Sync Live Host UFW
+            </button>
+            <button class="btn-primary" id="btn-open-ufw-modal">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+              Add Firewall Rule
+            </button>
+          </div>
         </div>
 
         <div class="panel-card" style="margin-bottom: 1.5rem;">
