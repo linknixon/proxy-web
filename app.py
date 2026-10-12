@@ -1431,6 +1431,7 @@ def delete_user(user_id: int, req: Request, db: Session = Depends(get_db)):
 # ---------------------------------------------------------
 @app.get("/api/hosts")
 def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+    deduplicate_proxy_hosts(db)
     sess = get_session_user(req)
     query = db.query(ProxyHost)
 
@@ -2018,33 +2019,70 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
 # ---------------------------------------------------------
 # Host Nginx & UFW Auto-Discovery / Auto-Sync
 # ---------------------------------------------------------
+def deduplicate_proxy_hosts(db: Session) -> int:
+    """
+    Finds and eliminates duplicate proxy hosts in the database.
+    Keeps only the single best entry for each primary domain (preferring non-127.0.0.1 upstream targets).
+    """
+    all_hosts = db.query(ProxyHost).order_by(ProxyHost.id.asc()).all()
+    seen = {}
+    to_delete = []
+
+    for h in all_hosts:
+        doms = [d.strip().lower() for d in h.domain_names.split(",") if d.strip()]
+        if not doms:
+            continue
+        primary = doms[0]
+
+        if primary not in seen:
+            seen[primary] = h
+        else:
+            existing = seen[primary]
+            # If current host has a real upstream IP and existing was 127.0.0.1, keep current host and delete existing
+            if existing.forward_host in ["127.0.0.1", "localhost"] and h.forward_host not in ["127.0.0.1", "localhost"]:
+                to_delete.append(existing.id)
+                seen[primary] = h
+            else:
+                to_delete.append(h.id)
+
+    if to_delete:
+        db.query(ProxyHost).filter(ProxyHost.id.in_(to_delete)).delete(synchronize_session=False)
+        db.commit()
+    return len(to_delete)
+
 def scan_host_nginx_configs() -> list:
     """
-    Scans host Linux system for real Nginx configuration files across standard directories:
-    /etc/nginx/sites-enabled/, /etc/nginx/sites-available/, /etc/nginx/conf.d/, /usr/local/nginx/conf/
-    Returns parsed configurations.
+    Scans host Linux system for real active Nginx configurations.
+    Strictly prioritizes /etc/nginx/sites-enabled/ to avoid duplicates from sites-available/.
+    Deduplicates by primary domain and ignores pure HTTP->HTTPS redirect blocks.
     """
-    search_dirs = [
-        "/etc/nginx/sites-enabled",
-        "/etc/nginx/sites-available",
-        "/etc/nginx/conf.d",
-        "/usr/local/nginx/conf/sites-enabled",
-        "/usr/local/nginx/conf/conf.d"
-    ]
+    search_dirs = []
+    # If sites-enabled exists and has files, ONLY scan sites-enabled. Never mix with sites-available!
+    if os.path.isdir("/etc/nginx/sites-enabled") and len(os.listdir("/etc/nginx/sites-enabled")) > 0:
+        search_dirs.append("/etc/nginx/sites-enabled")
+        if os.path.isdir("/etc/nginx/conf.d") and len(os.listdir("/etc/nginx/conf.d")) > 0:
+            search_dirs.append("/etc/nginx/conf.d")
+    elif os.path.isdir("/etc/nginx/conf.d") and len(os.listdir("/etc/nginx/conf.d")) > 0:
+        search_dirs.append("/etc/nginx/conf.d")
+    elif os.path.isdir("/etc/nginx/sites-available"):
+        search_dirs.append("/etc/nginx/sites-available")
+    elif os.path.isdir("/usr/local/nginx/conf"):
+        search_dirs.append("/usr/local/nginx/conf")
+
     found_files = []
     for d in search_dirs:
-        if os.path.isdir(d):
-            try:
-                for entry in sorted(os.listdir(d)):
-                    full_p = os.path.join(d, entry)
-                    if os.path.isfile(full_p):
-                        real_p = os.path.realpath(full_p)
-                        if real_p not in found_files:
-                            found_files.append(real_p)
-            except Exception as e:
-                print(f"Notice: Reading Nginx directory {d}: {e}")
+        try:
+            for entry in sorted(os.listdir(d)):
+                full_p = os.path.join(d, entry)
+                if os.path.isfile(full_p):
+                    real_p = os.path.realpath(full_p)
+                    if real_p not in found_files:
+                        found_files.append(real_p)
+        except Exception as e:
+            print(f"Notice: Reading Nginx directory {d}: {e}")
 
-    results = []
+    domain_map = {}
+
     for fpath in found_files:
         try:
             with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
@@ -2058,35 +2096,77 @@ def scan_host_nginx_configs() -> list:
                 server_blocks = [content]
 
             for block in server_blocks:
-                parsed = parse_nginx_server_block(block)
-                doms = [d.strip() for d in parsed["domain_names"].split(",") if d.strip() and d.strip() not in ["_", "localhost", "imported-host.local"]]
+                server_name_match = re.search(r'server_name\s+([^;]+);', block, re.IGNORECASE)
+                if not server_name_match:
+                    continue
+                raw_domains = server_name_match.group(1).split()
+                doms = [d.strip() for d in raw_domains if d.strip() and not d.startswith('_') and d.strip() not in ["localhost", "127.0.0.1"]]
                 if not doms:
                     continue
 
-                ssl_cert_match = re.search(r'ssl_certificate\s+([^;]+);', block)
-                ssl_provider = "Let's Encrypt" if (ssl_cert_match and "letsencrypt" in ssl_cert_match.group(1).lower()) else ("Self-Signed" if parsed["ssl_forced"] else "None")
+                primary_domain = doms[0].lower()
 
-                results.append({
+                proxy_pass_match = re.search(r'proxy_pass\s+(https?://)([^:;/]+)(?::(\d+))?([^;]*);', block, re.IGNORECASE)
+                has_proxy_pass = bool(proxy_pass_match)
+
+                # Pure redirect blocks (HTTP port 80 -> HTTPS) must never become fake 127.0.0.1:8080 entries
+                is_pure_redirect = bool(re.search(r'return\s+301\s+https', block, re.IGNORECASE)) and not has_proxy_pass
+
+                if is_pure_redirect:
+                    if primary_domain in domain_map:
+                        domain_map[primary_domain]["ssl_forced"] = True
+                    continue
+
+                forward_scheme = "http"
+                forward_host = "127.0.0.1"
+                forward_port = 80
+                if proxy_pass_match:
+                    forward_scheme = proxy_pass_match.group(1).replace("://", "")
+                    forward_host = proxy_pass_match.group(2)
+                    forward_port = int(proxy_pass_match.group(3)) if proxy_pass_match.group(3) else (443 if forward_scheme == "https" else 80)
+                else:
+                    # Skip blocks with no proxy_pass to avoid duplicate loopback entries
+                    continue
+
+                websocket_support = bool(re.search(r'Upgrade|http_upgrade', block, re.IGNORECASE))
+                block_exploits = bool(re.search(r'\.git|\.env|deny\s+all', block, re.IGNORECASE))
+                ssl_forced = bool(re.search(r'443\s+ssl|ssl_certificate|return\s+301\s+https', block, re.IGNORECASE))
+
+                ssl_cert_match = re.search(r'ssl_certificate\s+([^;]+);', block)
+                ssl_provider = "Let's Encrypt" if (ssl_cert_match and "letsencrypt" in ssl_cert_match.group(1).lower()) else ("Self-Signed" if ssl_forced else "None")
+
+                host_entry = {
                     "file_path": fpath,
                     "domain_names": ", ".join(doms),
-                    "forward_scheme": parsed["forward_scheme"],
-                    "forward_host": parsed["forward_host"],
-                    "forward_port": parsed["forward_port"],
-                    "websocket_support": parsed["websocket_support"],
-                    "block_exploits": parsed["block_exploits"],
-                    "ssl_forced": parsed["ssl_forced"],
+                    "forward_scheme": forward_scheme,
+                    "forward_host": forward_host,
+                    "forward_port": forward_port,
+                    "websocket_support": websocket_support,
+                    "block_exploits": block_exploits,
+                    "ssl_forced": ssl_forced,
                     "ssl_provider": ssl_provider,
-                    "custom_nginx_config": block.strip()
-                })
+                    "custom_nginx_config": block.strip(),
+                    "has_proxy_pass": has_proxy_pass
+                }
+
+                if primary_domain in domain_map:
+                    existing_entry = domain_map[primary_domain]
+                    if not existing_entry["has_proxy_pass"] and has_proxy_pass:
+                        domain_map[primary_domain] = host_entry
+                    elif existing_entry["forward_host"] in ["127.0.0.1", "localhost"] and forward_host not in ["127.0.0.1", "localhost"]:
+                        domain_map[primary_domain] = host_entry
+                    elif not existing_entry["ssl_forced"] and ssl_forced:
+                        existing_entry["ssl_forced"] = True
+                        existing_entry["ssl_provider"] = ssl_provider
+                else:
+                    domain_map[primary_domain] = host_entry
         except Exception as e:
             print(f"Notice: Parsing {fpath}: {e}")
 
-    return results
+    return list(domain_map.values())
 
 def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> dict:
     discovered = scan_host_nginx_configs()
-    if not discovered:
-        return {"status": "skipped", "message": "No active Nginx configuration files found in /etc/nginx.", "synced": 0}
 
     demo_domains = ["api.novacloud.io", "portal.novacloudedges.com", "staging.gisunika.org", "migration-test.ncloud.io", "sun.ac.ug"]
     if force_replace_demo:
@@ -2094,15 +2174,22 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
             db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{dd}%")).delete(synchronize_session=False)
         db.commit()
 
+    # Pre-clean duplicates from existing DB
+    deduplicate_proxy_hosts(db)
+
+    if not discovered:
+        return {"status": "skipped", "message": "No active Nginx proxy configurations found in sites-enabled.", "synced": 0}
+
     synced_count = 0
     created_count = 0
     updated_count = 0
 
     for item in discovered:
-        primary_domain = item["domain_names"].split(",")[0].strip()
+        primary_domain = item["domain_names"].split(",")[0].strip().lower()
         existing = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{primary_domain}%")).first()
 
         if existing:
+            existing.domain_names = item["domain_names"]
             existing.forward_scheme = item["forward_scheme"]
             existing.forward_host = item["forward_host"]
             existing.forward_port = item["forward_port"]
@@ -2133,6 +2220,10 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
         synced_count += 1
 
     db.commit()
+
+    # Final deduplication pass to ensure strictly 1 row per domain
+    deduplicate_proxy_hosts(db)
+
     return {
         "status": "success",
         "synced": synced_count,
@@ -2215,6 +2306,13 @@ def api_clear_demo_hosts(req: Request, db: Session = Depends(get_db)):
         deleted += cnt
     db.commit()
     return {"message": f"Successfully removed {deleted} demo hosts from database."}
+
+@app.post("/api/hosts/deduplicate")
+def api_deduplicate_hosts(req: Request, db: Session = Depends(get_db)):
+    """Removes duplicate proxy hosts from database, keeping only the single best entry per domain."""
+    verify_super_admin(req)
+    deleted = deduplicate_proxy_hosts(db)
+    return {"message": f"Successfully removed {deleted} duplicate host records.", "removed": deleted}
 
 @app.post("/api/ufw/auto-sync")
 def api_sync_host_ufw(req: Request, db: Session = Depends(get_db)):
