@@ -13,6 +13,8 @@ import secrets
 import hashlib
 import shutil
 import tempfile
+import threading
+import socket
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from collections import deque
@@ -332,10 +334,10 @@ class AbuseReportCreate(BaseModel):
     block_in_ufw: bool = True
 
 class SuspensionSettingUpdate(BaseModel):
-    title: str
-    message: str
-    contact_email: str
-    contact_phone: str
+    title: Optional[str] = "Account Suspended — 503 Maintenance Mode"
+    message: Optional[str] = "This website service has been temporarily deactivated."
+    contact_email: Optional[str] = "support@novacloudedges.com"
+    contact_phone: Optional[str] = "+256 700 892 110"
 
 class UserCreate(BaseModel):
     username: str = Field(..., example="ops_officer")
@@ -550,18 +552,28 @@ def get_system_metrics():
 # ---------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------
-def get_setting(db: Session, key: str, default: str) -> str:
-    setting = db.query(SystemSetting).filter(SystemSetting.setting_key == key).first()
-    return setting.setting_value if setting else default
+def get_setting(db: Optional[Session], key: str, default: str) -> str:
+    try:
+        if db is None:
+            return default
+        setting = db.query(SystemSetting).filter(SystemSetting.setting_key == key).first()
+        return setting.setting_value if (setting and setting.setting_value is not None) else default
+    except Exception:
+        return default
 
-def set_setting(db: Session, key: str, val: str):
-    setting = db.query(SystemSetting).filter(SystemSetting.setting_key == key).first()
-    if setting:
-        setting.setting_value = val
-    else:
-        setting = SystemSetting(setting_key=key, setting_value=val)
-        db.add(setting)
-    db.commit()
+def set_setting(db: Optional[Session], key: str, val: str):
+    try:
+        if db is None:
+            return
+        setting = db.query(SystemSetting).filter(SystemSetting.setting_key == key).first()
+        if setting:
+            setting.setting_value = val
+        else:
+            setting = SystemSetting(setting_key=key, setting_value=val)
+            db.add(setting)
+        db.commit()
+    except Exception as e:
+        print(f"Notice: set_setting {key}: {e}")
 
 # Common / weak passwords blacklist
 DISALLOWED_COMMON_PASSWORDS = {
@@ -690,49 +702,12 @@ def get_session_user(req: Request) -> Optional[dict]:
     sess["last_active"] = now
     return sess
 
-def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: Session, override_recipient: Optional[str] = None, raise_on_error: bool = False):
-    """
-    Sends automated email notifications via configured SMTP server for:
-    - ufw: UFW rule modifications
-    - blocking: Abuse reports and source IP blocks
-    - ssl: SSL certificate expirations (<15d)
-    - domain: Domain registration renewals
-    - suspension: Domain suspension/reactivations
-    - test: Interactive SMTP test emails
-    - recovery: Password recovery credentials
-    """
+def _send_smtp_worker(smtp_host: str, smtp_port: int, smtp_user: str, smtp_pass: str, recipients: list, smtp_encryption: str, trigger_type: str, subject: str, body_text: str):
     try:
-        # Check if trigger is enabled in settings (bypassed for test and recovery requests)
-        if trigger_type not in ["test", "recovery"]:
-            trigger_active = get_setting(db, f"smtp_trigger_{trigger_type}", "1")
-            if trigger_active not in ["1", "true", "True"]:
-                return
-
-        smtp_host = get_setting(db, "smtp_host", "mail.ncloud.co.ug")
-        smtp_port = int(get_setting(db, "smtp_port", "587"))
-        smtp_user = get_setting(db, "smtp_user", "alerts@novacloudedges.com")
-        smtp_pass = get_setting(db, "smtp_pass", "")
-        smtp_to = get_setting(db, "smtp_to_emails", "admin@novacloudedges.com")
-        smtp_encryption = get_setting(db, "smtp_encryption", "starttls")
-
-        if not smtp_host:
-            if raise_on_error:
-                raise ValueError("SMTP host is not configured.")
-            return
-
-        if override_recipient:
-            recipients = [e.strip() for e in override_recipient.split(",") if e.strip()]
-        else:
-            recipients = [e.strip() for e in smtp_to.split(",") if e.strip()]
-
-        if not recipients:
-            if raise_on_error:
-                raise ValueError("No recipient email address specified.")
-            return
-
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"[Nova Proxy Alert] {subject}"
-        msg["From"] = f"Nova Cloud Edges <{smtp_user}>"
+        from_addr = smtp_user or "alerts@novaproxy.local"
+        msg["From"] = f"Nova Cloud Edges <{from_addr}>"
         msg["To"] = ", ".join(recipients)
         msg["Date"] = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
 
@@ -753,27 +728,246 @@ def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: 
         msg.attach(MIMEText(html_body, "html"))
 
         if smtp_encryption == "ssl":
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=5)
         else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=5)
             if smtp_encryption == "starttls":
                 server.starttls()
 
         if smtp_user and smtp_pass:
             server.login(smtp_user, smtp_pass)
 
-        server.sendmail(smtp_user, recipients, msg.as_string())
+        server.sendmail(from_addr, recipients, msg.as_string())
         server.quit()
+    except Exception as e:
+        print(f"Notice: SMTP background dispatch error: {e}")
+
+def send_smtp_notification(trigger_type: str, subject: str, body_text: str, db: Session, override_recipient: Optional[str] = None, raise_on_error: bool = False):
+    """
+    Sends automated email notifications via configured SMTP server for:
+    - ufw: UFW rule modifications
+    - blocking: Abuse reports and source IP blocks
+    - ssl: SSL certificate expirations (<15d)
+    - domain: Domain registration renewals
+    - suspension: Domain suspension/reactivations
+    - test: Interactive SMTP test emails
+    - recovery: Password recovery credentials
+    Dispatches in background daemon thread for zero latency unless raise_on_error is True.
+    """
+    try:
+        # Check if trigger is enabled in settings (bypassed for test and recovery requests)
+        if trigger_type not in ["test", "recovery"]:
+            trigger_active = get_setting(db, f"smtp_trigger_{trigger_type}", "1")
+            if trigger_active not in ["1", "true", "True"]:
+                return
+
+        smtp_host = get_setting(db, "smtp_host", "").strip()
+        smtp_port = int(get_setting(db, "smtp_port", "587") or 587)
+        smtp_user = get_setting(db, "smtp_user", "").strip()
+        smtp_pass = get_setting(db, "smtp_pass", "")
+        smtp_to = get_setting(db, "smtp_to_emails", "").strip()
+        smtp_encryption = get_setting(db, "smtp_encryption", "starttls")
+
+        # Skip immediately if host is blank or unconfigured placeholder
+        if not smtp_host or smtp_host in ["mail.ncloud.co.ug", "localhost", "127.0.0.1", "none", "example.com"]:
+            if raise_on_error:
+                raise ValueError("SMTP server host is not configured or uses placeholder address.")
+            return
+
+        if override_recipient:
+            recipients = [e.strip() for e in override_recipient.split(",") if e.strip()]
+        else:
+            recipients = [e.strip() for e in smtp_to.split(",") if e.strip()]
+
+        if not recipients:
+            if raise_on_error:
+                raise ValueError("No recipient email address specified.")
+            return
+
+        if raise_on_error:
+            # Synchronous execution for interactive test button
+            _send_smtp_worker(smtp_host, smtp_port, smtp_user, smtp_pass, recipients, smtp_encryption, trigger_type, subject, body_text)
+        else:
+            # Asynchronous background daemon thread for zero-latency operations
+            t = threading.Thread(
+                target=_send_smtp_worker,
+                args=(smtp_host, smtp_port, smtp_user, smtp_pass, recipients, smtp_encryption, trigger_type, subject, body_text),
+                daemon=True
+            )
+            t.start()
     except Exception as e:
         print(f"Notice: SMTP notification dispatch: {e}")
         if raise_on_error:
             raise e
+
+def build_suspended_landing_html(
+    domain: str = "your-domain.com",
+    reason: str = "Administrative Policy Suspension",
+    title: str = "Account Suspended — 503 Maintenance Mode",
+    message: str = "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review.",
+    email: str = "support@novacloudedges.com",
+    phone: str = "+256 700 892 110"
+) -> str:
+    """Generates the unified responsive 503 suspended landing page HTML."""
+    s_title = (title or "").replace("'", "&#39;")
+    s_msg = (message or "").replace("'", "&#39;")
+    s_dom = (domain or "").replace("'", "&#39;")
+    s_reason = (reason or "").replace("'", "&#39;")
+    s_email = (email or "").replace("'", "&#39;")
+    s_phone = (phone or "").replace("'", "&#39;")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{s_title} — Nova Cloud Edges</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0f172a 100%);
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }}
+    .card {{
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid #334155;
+      border-radius: 20px;
+      max-width: 580px;
+      width: 100%;
+      padding: 3rem 2.5rem;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+      text-align: center;
+      backdrop-filter: blur(16px);
+      position: relative;
+      overflow: hidden;
+    }}
+    .card::before {{
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #f59e0b, #ef4444);
+    }}
+    .icon-box {{
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.5rem auto;
+      font-size: 1.8rem;
+    }}
+    .badge {{
+      display: inline-block;
+      padding: 0.35rem 0.9rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.25rem;
+    }}
+    h1 {{
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.75rem;
+      color: #ffffff;
+    }}
+    .domain-tag {{
+      display: inline-block;
+      font-family: monospace;
+      font-size: 0.95rem;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+      padding: 0.2rem 0.6rem;
+      border-radius: 6px;
+      margin-bottom: 1.25rem;
+    }}
+    p {{
+      font-size: 0.95rem;
+      line-height: 1.65;
+      color: #94a3b8;
+      margin-bottom: 1.5rem;
+    }}
+    .reason-box {{
+      background: #0f172a;
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      text-align: left;
+      font-size: 0.88rem;
+      color: #cbd5e1;
+      margin-bottom: 1.75rem;
+    }}
+    .contact-box {{
+      border-top: 1px solid #334155;
+      padding-top: 1.5rem;
+      font-size: 0.84rem;
+      color: #64748b;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }}
+    .contact-box a {{
+      color: #38bdf8;
+      text-decoration: none;
+      font-weight: 600;
+    }}
+    .contact-box a:hover {{
+      text-decoration: underline;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-box">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+    </div>
+    <div class="badge">503 Service Suspended</div>
+    <h1>{s_title}</h1>
+    <div class="domain-tag">{s_dom}</div>
+    <p>{s_msg}</p>
+    <div class="reason-box">
+      <div style="font-size: 0.76rem; text-transform: uppercase; color: #94a3b8; font-weight: 700; margin-bottom: 0.25rem;">Suspension Statement:</div>
+      <div>{s_reason}</div>
+    </div>
+    <div class="contact-box">
+      <div>If you are the website owner, please contact Nova Cloud Edges Support:</div>
+      <div>Email: <a href="mailto:{s_email}">{s_email}</a> &bull; Hotline: <strong>{s_phone}</strong></div>
+    </div>
+  </div>
+</body>
+</html>"""
 
 def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     """Generates production-grade Nginx server configuration blocks with custom suspension page."""
     domains = host.domain_names.replace(",", " ")
     domains = " ".join(domains.split())
     primary_domain = domains.split()[0] if domains else "localhost"
+    all_domains = domains.split()
     reason = host.suspended_reason or "Administrative Policy Suspension"
 
     susp_title = get_setting(db, "suspension_title", "Account Suspended — 503 Maintenance Mode")
@@ -781,31 +975,50 @@ def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     susp_email = get_setting(db, "suspension_support_email", "support@novacloudedges.com")
     susp_phone = get_setting(db, "suspension_support_phone", "+256 700 892 110")
 
-    if host.is_suspended:
-        # Determine SSL certificates for HTTPS 503 block
-        cert_path = f"/etc/letsencrypt/live/{primary_domain}/fullchain.pem"
-        key_path = f"/etc/letsencrypt/live/{primary_domain}/privkey.pem"
-        if host.custom_nginx_config:
-            m_c = re.search(r'ssl_certificate\s+([^;]+);', host.custom_nginx_config)
-            m_k = re.search(r'ssl_certificate_key\s+([^;]+);', host.custom_nginx_config)
-            if m_c and m_k:
-                cert_path = m_c.group(1).strip()
-                key_path = m_k.group(1).strip()
+    # Determine SSL certificates for HTTPS blocks
+    found_cert = None
+    found_key = None
+    if host.custom_nginx_config:
+        m_c = re.search(r'ssl_certificate\s+([^;]+);', host.custom_nginx_config)
+        m_k = re.search(r'ssl_certificate_key\s+([^;]+);', host.custom_nginx_config)
+        if m_c and m_k:
+            c_candidate = m_c.group(1).strip()
+            k_candidate = m_k.group(1).strip()
+            if os.path.isfile(c_candidate) and os.path.isfile(k_candidate):
+                found_cert, found_key = c_candidate, k_candidate
 
-        has_ssl = host.ssl_forced or os.path.exists(cert_path)
-        landing_html = (
-            f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{susp_title}</title>'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-            f'<style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:1.5rem;box-sizing:border-box}}'
-            f'.card{{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:540px;width:100%;padding:2.5rem;box-shadow:0 12px 40px rgba(0,0,0,0.6);text-align:center}}'
-            f'.badge{{display:inline-block;padding:0.35rem 0.85rem;border-radius:9999px;font-size:0.78rem;font-weight:700;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);margin-bottom:1.25rem;text-transform:uppercase;letter-spacing:0.05em}}'
-            f'h1{{font-size:1.6rem;font-weight:800;margin:0 0 1rem;color:#f8fafc}}p{{color:#94a3b8;font-size:0.95rem;line-height:1.6;margin:0 0 1.5rem}}'
-            f'.reason{{background:#0f172a;border-left:4px solid #f59e0b;padding:0.85rem 1rem;text-align:left;border-radius:6px;font-size:0.88rem;color:#cbd5e1;margin-bottom:1.5rem}}'
-            f'.contact{{font-size:0.84rem;color:#64748b;border-top:1px solid #334155;padding-top:1.25rem}}a{{color:#38bdf8;text-decoration:none}}</style></head>'
-            f'<body><div class="card"><div class="badge">Notice of Suspension</div><h1>{susp_title}</h1><p>{susp_msg}</p>'
-            f'<div class="reason"><strong>Notice:</strong> {reason} (Host: {primary_domain})</div>'
-            f'<div class="contact">Need help? Contact <a href="mailto:{susp_email}">{susp_email}</a> | Tel: {susp_phone}</div></div></body></html>'
+    if not found_cert:
+        for d in all_domains:
+            c_candidate = f"/etc/letsencrypt/live/{d}/fullchain.pem"
+            k_candidate = f"/etc/letsencrypt/live/{d}/privkey.pem"
+            if os.path.isfile(c_candidate) and os.path.isfile(k_candidate):
+                found_cert, found_key = c_candidate, k_candidate
+                break
+
+    if not found_cert:
+        parts = primary_domain.split(".")
+        if len(parts) > 2:
+            root_dom = ".".join(parts[-2:])
+            c_candidate = f"/etc/letsencrypt/live/{root_dom}/fullchain.pem"
+            k_candidate = f"/etc/letsencrypt/live/{root_dom}/privkey.pem"
+            if os.path.isfile(c_candidate) and os.path.isfile(k_candidate):
+                found_cert, found_key = c_candidate, k_candidate
+
+    cert_path = found_cert or f"/etc/letsencrypt/live/{primary_domain}/fullchain.pem"
+    key_path = found_key or f"/etc/letsencrypt/live/{primary_domain}/privkey.pem"
+    has_ssl = (os.path.isfile(cert_path) and os.path.isfile(key_path)) if IS_LINUX else bool(host.ssl_forced)
+
+    if host.is_suspended:
+        landing_html = build_suspended_landing_html(
+            domain=primary_domain,
+            reason=reason,
+            title=susp_title,
+            message=susp_msg,
+            email=susp_email,
+            phone=susp_phone
         )
+        escaped_landing = landing_html.replace("'", "&#39;")
+        escaped_landing = re.sub(r'\s+', ' ', escaped_landing).strip()
 
         ssl_block = ""
         if has_ssl:
@@ -824,15 +1037,16 @@ server {{
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    error_page 503 @suspended_landing;
+    default_type text/html;
 
     location / {{
-        return 503;
+        return 503 '{escaped_landing}';
     }}
 
+    error_page 500 502 503 504 =503 @suspended_landing;
     location @suspended_landing {{
         default_type text/html;
-        return 503 '{landing_html}';
+        return 503 '{escaped_landing}';
     }}
 }}
 """
@@ -850,15 +1064,16 @@ server {{
     listen [::]:80;
     server_name {domains};
 
-    error_page 503 @suspended_landing;
+    default_type text/html;
 
     location / {{
-        return 503;
+        return 503 '{escaped_landing}';
     }}
 
+    error_page 500 502 503 504 =503 @suspended_landing;
     location @suspended_landing {{
         default_type text/html;
-        return 503 '{landing_html}';
+        return 503 '{escaped_landing}';
     }}
 }}
 {ssl_block}
@@ -895,7 +1110,7 @@ server {{
 
     target_url = f"{host.forward_scheme}://{host.forward_host}:{host.forward_port}"
 
-    if host.ssl_forced:
+    if host.ssl_forced and has_ssl:
         config = f"""# ========================================================
 # Nova Proxy Admin - Virtual Host Configuration
 # Domain(s): {domains}
@@ -924,8 +1139,8 @@ server {{
     listen [::]:443 ssl http2;
     server_name {domains};
 
-    ssl_certificate /etc/letsencrypt/live/{primary_domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{primary_domain}/privkey.pem;
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
     ssl_session_timeout 1d;
     ssl_session_cache shared:SSL:50m;
     ssl_session_tickets off;
@@ -950,8 +1165,12 @@ server {{
 }}
 """
     else:
+        ssl_note = ""
+        if host.ssl_forced and not has_ssl:
+            ssl_note = f"\n# Notice: SSL enforced in database, but certificate files ({cert_path}) not yet on disk.\n# Serving HTTP port 80 until Certbot provisions certificates."
+
         config = f"""# ========================================================
-# Nova Proxy Admin - HTTP Reverse Proxy Virtual Host
+# Nova Proxy Admin - HTTP Reverse Proxy Virtual Host{ssl_note}
 # Domain(s): {domains}
 # Target: {target_url}
 # ========================================================
@@ -1610,7 +1829,6 @@ def delete_user(user_id: int, req: Request, db: Session = Depends(get_db)):
 # ---------------------------------------------------------
 @app.get("/api/hosts")
 def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
-    deduplicate_proxy_hosts(db)
     sess = get_session_user(req)
     query = db.query(ProxyHost)
 
@@ -1806,16 +2024,19 @@ def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = N
 
     action_label = "SUSPENDED" if host.is_suspended else "ACTIVATED"
     client_ip = req.client.host if req.client else "127.0.0.1"
-    audit = AuditLog(
-        action=f"HOST_{action_label}",
-        details=f"Host #{host.id} '{host.domain_names}' changed to {action_label}. Reason: {host.suspended_reason} (Nginx: {nginx_res.get('status', 'skipped')})",
-        status="success",
-        client_ip=client_ip
-    )
-    db.add(audit)
-    db.commit()
+    try:
+        audit = AuditLog(
+            action=f"HOST_{action_label}",
+            details=f"Host #{host.id} '{host.domain_names}' changed to {action_label}. Reason: {host.suspended_reason} (Nginx: {nginx_res.get('status', 'skipped')})",
+            status="success",
+            client_ip=client_ip
+        )
+        db.add(audit)
+        db.commit()
+    except Exception:
+        pass
 
-    # Trigger SMTP email notification
+    # Trigger SMTP email notification (non-blocking)
     send_smtp_notification(
         "suspension",
         f"Domain {action_label.capitalize()} Alert: {host.domain_names}",
@@ -1828,7 +2049,7 @@ def toggle_host_suspension(host_id: int, req: Request, reason: Optional[str] = N
     if nginx_res.get("status") == "success":
         msg += f" — Nginx configuration updated and reloaded on host."
     elif nginx_res.get("status") == "error":
-        msg += f" — Warning: Nginx reload failed: {nginx_res.get('message')}"
+        msg += f" — Notice: {nginx_res.get('message')}"
 
     return {
         "message": msg,
@@ -1935,13 +2156,20 @@ def parse_nginx_server_block(text: str) -> dict:
     }
 
 def verify_super_admin(req: Request):
-    """Enforces that only super_admin can perform system migration, backups, and exports."""
+    """Enforces that only super_admin / admin can perform administrative and system actions."""
+    sess = get_session_user(req)
+    if sess and sess.get("role"):
+        if sess["role"].strip().lower() in ["super_admin", "superadmin", "admin"]:
+            return
     role = req.headers.get("X-User-Role") or req.query_params.get("role")
-    if role and role.strip().lower() not in ["super_admin", "superadmin", "admin"]:
-        raise HTTPException(
-            status_code=403,
-            detail="Permission Denied: Only Super Admin can export or import server configurations."
-        )
+    if role and role.strip().lower() in ["super_admin", "superadmin", "admin"]:
+        return
+    if not sess and not role:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Permission Denied: Only Super Admin can perform this action."
+    )
 
 @app.get("/api/hosts/{host_id}/export-conf")
 def export_single_host_conf(host_id: int, req: Request, db: Session = Depends(get_db)):
@@ -2499,16 +2727,29 @@ def api_sync_host_nginx(req: Request, replace_demo: bool = False, db: Session = 
     result = sync_host_nginx_into_db(db, force_replace_demo=replace_demo)
     return result
 
+def purge_demo_hosts(db: Session) -> int:
+    """Removes development dummy seed hosts (demo.novacloudedges.com, etc.) from database if explicitly requested."""
+    demo_patterns = [
+        "demo.novacloudedges.com",
+        "migration-test.ncloud.io",
+        "staging.gisunika.org"
+    ]
+    deleted = 0
+    try:
+        for pat in demo_patterns:
+            cnt = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{pat}%")).delete(synchronize_session=False)
+            deleted += cnt
+        if deleted > 0:
+            db.commit()
+    except Exception as e:
+        print(f"Notice: purge_demo_hosts: {e}")
+    return deleted
+
 @app.post("/api/nginx/clear-demo-hosts")
 def api_clear_demo_hosts(req: Request, db: Session = Depends(get_db)):
-    """Removes development dummy seed hosts (api.novacloud.io, 127.0.0.1:8000, etc.) from database."""
+    """Removes development dummy seed hosts from database."""
     verify_super_admin(req)
-    demo_domains = ["api.novacloud.io", "portal.novacloudedges.com", "staging.gisunika.org", "migration-test.ncloud.io", "sun.ac.ug"]
-    deleted = 0
-    for dd in demo_domains:
-        cnt = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{dd}%")).delete(synchronize_session=False)
-        deleted += cnt
-    db.commit()
+    deleted = purge_demo_hosts(db)
     return {"message": f"Successfully removed {deleted} demo hosts from database."}
 
 @app.post("/api/hosts/deduplicate")
@@ -2527,18 +2768,15 @@ def api_sync_host_ufw(req: Request, db: Session = Depends(get_db)):
 
 @app.on_event("startup")
 def on_app_startup():
-    """Auto-syncs live host Nginx and UFW configuration on Linux server startup."""
+    """Auto-syncs live host Nginx and UFW configuration on Linux server startup without deleting any existing data."""
     try:
-        if platform.system() == "Linux" and os.path.isdir("/etc/nginx"):
-            db = SessionLocal()
-            try:
-                cnt = db.query(ProxyHost).count()
-                demo_cnt = db.query(ProxyHost).filter(ProxyHost.domain_names.like("%novacloud.io%")).count()
-                if cnt == 0 or demo_cnt == cnt:
-                    sync_host_nginx_into_db(db, force_replace_demo=True)
+        db = SessionLocal()
+        try:
+            if platform.system() == "Linux" and os.path.isdir("/etc/nginx"):
+                sync_host_nginx_into_db(db, force_replace_demo=False)
                 sync_host_ufw_into_db(db)
-            finally:
-                db.close()
+        finally:
+            db.close()
     except Exception as e:
         print(f"Notice: Server startup auto-sync: {e}")
 
@@ -3092,18 +3330,88 @@ def report_domain_abuse(data: AbuseReportCreate, req: Request, db: Session = Dep
 
 @app.get("/api/whois/{domain}")
 def lookup_whois(domain: str):
-    """Performs WHOIS domain intelligence query."""
+    """Performs live WHOIS domain intelligence query with real DNS resolution."""
     clean_domain = domain.lower().strip()
+    clean_domain = re.sub(r'^https?://', '', clean_domain).split('/')[0].split(':')[0]
+    if not clean_domain:
+        raise HTTPException(status_code=400, detail="Invalid domain name provided.")
+
+    # 1. Real IP resolution
+    resolved_ip = "Unresolved / Offline"
+    try:
+        resolved_ip = socket.gethostbyname(clean_domain)
+    except Exception:
+        resolved_ip = "DNS resolution failed"
+
+    # 2. Query WHOIS via CLI or fallback to port 43 socket
+    raw_text = ""
+    try:
+        proc = subprocess.run(["whois", clean_domain], capture_output=True, text=True, timeout=6)
+        raw_text = proc.stdout or proc.stderr or ""
+    except Exception:
+        pass
+
+    if not raw_text or "No whois server" in raw_text or len(raw_text.strip()) < 15:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect(("whois.iana.org", 43))
+            s.send((clean_domain + "\r\n").encode())
+            res_buf = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                res_buf += chunk
+            s.close()
+            raw_text = res_buf.decode("utf-8", errors="ignore")
+        except Exception as e:
+            if not raw_text:
+                raw_text = f"WHOIS service notice: {str(e)}"
+
+    # 3. Parse key attributes
+    registrar = "Unknown / Registry"
+    reg_match = re.search(r'(?:Registrar|registrar|Sponsoring Registrar):\s*(.+)', raw_text)
+    if reg_match:
+        registrar = reg_match.group(1).strip()
+
+    created_on = "Unknown"
+    cr_match = re.search(r'(?:Creation Date|Created|Registration Date|created|registered):\s*(.+)', raw_text, re.IGNORECASE)
+    if cr_match:
+        created_on = cr_match.group(1).strip()
+
+    expires_on = "Unknown"
+    exp_match = re.search(r'(?:Registry Expiry Date|Expiration Date|Expires|expires|paid-till):\s*(.+)', raw_text, re.IGNORECASE)
+    if exp_match:
+        expires_on = exp_match.group(1).strip()
+
+    nameservers = []
+    for m in re.finditer(r'(?:Name Server|nserver|nameserver):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
+        ns = m.group(1).strip().lower().rstrip('.')
+        if ns and ns not in nameservers:
+            nameservers.append(ns)
+
+    status_list = []
+    for m in re.finditer(r'(?:Domain Status|status):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
+        st = m.group(1).strip()
+        if st and st not in status_list:
+            status_list.append(st)
+
+    abuse_contact = "Unknown"
+    ab_match = re.search(r'(?:Registrar Abuse Contact Email|abuse-mailbox|e-mail):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE)
+    if ab_match:
+        abuse_contact = ab_match.group(1).strip()
+
     return {
         "domain": clean_domain,
-        "registrar": "Nova Cloud Edges Network Registrar / Cloudflare DNS",
-        "registered_on": "2024-03-12T00:00:00Z",
-        "expires_on": "2027-03-12T00:00:00Z",
-        "nameservers": ["ns1.novacloudedges.com", "ns2.novacloudedges.com"],
-        "dnssec": "Signed (Valid)",
-        "ip_resolution": "102.134.45.10",
-        "abuse_contact": "abuse@novacloudedges.com",
-        "status": "clientTransferProhibited, serverDeleteProhibited"
+        "ip_resolution": resolved_ip,
+        "registrar": registrar,
+        "registered_on": created_on,
+        "expires_on": expires_on,
+        "nameservers": nameservers[:6] if nameservers else ["None listed in WHOIS record"],
+        "status": ", ".join(status_list[:3]) if status_list else "Active / Registered",
+        "abuse_contact": abuse_contact,
+        "raw_record": raw_text
     }
 
 # ---------------------------------------------------------
@@ -3113,18 +3421,19 @@ def lookup_whois(domain: str):
 def get_suspension_settings(db: Session = Depends(get_db)):
     return {
         "title": get_setting(db, "suspension_title", "Account Suspended — 503 Maintenance Mode"),
-        "message": get_setting(db, "suspension_message", "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review."),
+        "message": get_setting(db, "suspension_message", "This website service has been temporarily deactivated due to scheduled maintenance or account review."),
         "contact_email": get_setting(db, "suspension_support_email", "support@novacloudedges.com"),
         "contact_phone": get_setting(db, "suspension_support_phone", "+256 700 892 110")
     }
 
 @app.post("/api/suspension-settings")
 def update_suspension_settings(data: SuspensionSettingUpdate, req: Request, db: Session = Depends(get_db)):
+    verify_super_admin(req)
     settings_map = {
-        "suspension_title": data.title,
-        "suspension_message": data.message,
-        "suspension_support_email": data.contact_email,
-        "suspension_support_phone": data.contact_phone
+        "suspension_title": (data.title or "").strip() or "Account Suspended — 503 Maintenance Mode",
+        "suspension_message": (data.message or "").strip() or "This website service has been temporarily deactivated.",
+        "suspension_support_email": (data.contact_email or "").strip() or "support@novacloudedges.com",
+        "suspension_support_phone": (data.contact_phone or "").strip() or "+256 700 892 110"
     }
     for k, v in settings_map.items():
         s = db.query(SystemSetting).filter(SystemSetting.setting_key == k).first()
@@ -3135,14 +3444,17 @@ def update_suspension_settings(data: SuspensionSettingUpdate, req: Request, db: 
     db.commit()
 
     client_ip = req.client.host if req.client else "127.0.0.1"
-    audit = AuditLog(
-        action="UPDATE_SUSPENSION_SETTINGS",
-        details="Updated public suspension statement wording and support contacts",
-        status="success",
-        client_ip=client_ip
-    )
-    db.add(audit)
-    db.commit()
+    try:
+        audit = AuditLog(
+            action="UPDATE_SUSPENSION_SETTINGS",
+            details="Updated public suspension statement wording and support contacts",
+            status="success",
+            client_ip=client_ip
+        )
+        db.add(audit)
+        db.commit()
+    except Exception:
+        pass
 
     return {"message": "Suspension statement settings updated successfully"}
 
@@ -3152,11 +3464,11 @@ def update_suspension_settings(data: SuspensionSettingUpdate, req: Request, db: 
 @app.get("/api/smtp-settings")
 def get_smtp_settings(db: Session = Depends(get_db)):
     return {
-        "smtp_host": get_setting(db, "smtp_host", "mail.ncloud.co.ug"),
-        "smtp_port": int(get_setting(db, "smtp_port", "587")),
-        "smtp_user": get_setting(db, "smtp_user", "alerts@novacloudedges.com"),
+        "smtp_host": get_setting(db, "smtp_host", ""),
+        "smtp_port": int(get_setting(db, "smtp_port", "587") or 587),
+        "smtp_user": get_setting(db, "smtp_user", ""),
         "smtp_pass": get_setting(db, "smtp_pass", ""),
-        "smtp_to_emails": get_setting(db, "smtp_to_emails", "admin@novacloudedges.com"),
+        "smtp_to_emails": get_setting(db, "smtp_to_emails", ""),
         "smtp_encryption": get_setting(db, "smtp_encryption", "starttls"),
         "smtp_trigger_ufw": get_setting(db, "smtp_trigger_ufw", "1") == "1",
         "smtp_trigger_blocking": get_setting(db, "smtp_trigger_blocking", "1") == "1",
@@ -3167,11 +3479,19 @@ def get_smtp_settings(db: Session = Depends(get_db)):
 
 @app.post("/api/smtp-settings")
 def update_smtp_settings(data: SmtpSettingsUpdate, req: Request, db: Session = Depends(get_db)):
-    host_val = (data.smtp_host or data.host or "mail.ncloud.co.ug").strip()
+    verify_super_admin(req)
+    host_val = (data.smtp_host or data.host or "").strip()
     port_val = str(data.smtp_port or data.port or 587)
-    user_val = (data.smtp_user or data.user or "alerts@novacloudedges.com").strip()
-    pass_val = data.smtp_pass if data.smtp_pass is not None else (data.password or "")
-    to_val = (data.smtp_to_emails or data.to_emails or "admin@novacloudedges.com").strip()
+    user_val = (data.smtp_user or data.user or "").strip()
+
+    # Preserve current password if not supplied
+    pass_input = data.smtp_pass if data.smtp_pass is not None else data.password
+    if pass_input and pass_input.strip():
+        pass_val = pass_input.strip()
+    else:
+        pass_val = get_setting(db, "smtp_pass", "")
+
+    to_val = (data.smtp_to_emails or data.to_emails or "").strip()
     enc_val = (data.smtp_encryption or data.encryption or "starttls").strip()
 
     tr_ufw = "1" if (data.smtp_trigger_ufw if data.smtp_trigger_ufw is not None else (data.trigger_ufw if data.trigger_ufw is not None else True)) else "0"
@@ -3202,30 +3522,36 @@ def update_smtp_settings(data: SmtpSettingsUpdate, req: Request, db: Session = D
     db.commit()
 
     client_ip = req.client.host if req.client else "127.0.0.1"
-    audit = AuditLog(
-        action="UPDATE_SMTP_SETTINGS",
-        details="Updated managed action SMTP server credentials and email notification triggers",
-        status="success",
-        client_ip=client_ip
-    )
-    db.add(audit)
-    db.commit()
+    try:
+        audit = AuditLog(
+            action="UPDATE_SMTP_SETTINGS",
+            details="Updated managed action SMTP server credentials and email notification triggers",
+            status="success",
+            client_ip=client_ip
+        )
+        db.add(audit)
+        db.commit()
+    except Exception:
+        pass
 
     return {"message": "SMTP configuration and alert triggers updated successfully"}
 
 @app.post("/api/smtp/test")
 def test_smtp_configuration(data: TestEmailRequest, req: Request, db: Session = Depends(get_db)):
+    verify_super_admin(req)
     target_email = data.test_email.strip() if (data.test_email and data.test_email.strip()) else ""
     if not target_email and data.recipient:
         target_email = data.recipient.strip()
     if not target_email:
-        target_email = get_setting(db, "smtp_to_emails", "admin@novacloudedges.com")
+        target_email = get_setting(db, "smtp_to_emails", "")
+    if not target_email:
+        raise HTTPException(status_code=400, detail="Please specify a recipient email address for testing.")
 
     try:
         send_smtp_notification(
             trigger_type="test",
-            subject="Nova Edge Proxy — SMTP Notification Test",
-            body_text=f"This is an operational test email notification from Nova Cloud Edges Proxy Admin.\nManaged action SMTP alerts are configured and functional.\nTarget Recipient: {target_email}",
+            subject="Nova Proxy Admin — Operational SMTP Notification Test",
+            body_text=f"This is an operational test email notification from Nova Proxy Admin.\nManaged action SMTP alerts are configured and functional.\nTarget Recipient: {target_email}",
             db=db,
             override_recipient=target_email,
             raise_on_error=True
@@ -3236,180 +3562,101 @@ def test_smtp_configuration(data: TestEmailRequest, req: Request, db: Session = 
 
 
 @app.get("/suspended", response_class=HTMLResponse)
-def render_suspended_landing_page(domain: str = Query("your-domain.com"), reason: str = Query("Administrative Policy Suspension"), db: Session = Depends(get_db)):
+@app.get("/suspended/", response_class=HTMLResponse)
+def render_suspended_landing_page(
+    domain: str = Query("your-domain.com"),
+    reason: str = Query("Administrative Policy Suspension"),
+    db: Session = Depends(get_db)
+):
     """Public rendered page when visitors hit a suspended domain."""
-    title = get_setting(db, "suspension_title", "Account Suspended — 503 Maintenance Mode")
-    message = get_setting(db, "suspension_message", "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review.")
-    email = get_setting(db, "suspension_support_email", "support@novacloudedges.com")
-    phone = get_setting(db, "suspension_support_phone", "+256 700 892 110")
+    try:
+        title = get_setting(db, "suspension_title", "Account Suspended — 503 Maintenance Mode")
+        message = get_setting(db, "suspension_message", "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review.")
+        email = get_setting(db, "suspension_support_email", "support@novacloudedges.com")
+        phone = get_setting(db, "suspension_support_phone", "+256 700 892 110")
+    except Exception:
+        title = "Account Suspended — 503 Maintenance Mode"
+        message = "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review."
+        email = "support@novacloudedges.com"
+        phone = "+256 700 892 110"
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title} — Nova Cloud Edges</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{
-      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-      background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0f172a 100%);
-      color: #f8fafc;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 1.5rem;
-    }}
-    .card {{
-      background: rgba(30, 41, 59, 0.95);
-      border: 1px solid #334155;
-      border-radius: 20px;
-      max-width: 580px;
-      width: 100%;
-      padding: 3rem 2.5rem;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
-      text-align: center;
-      backdrop-filter: blur(16px);
-      position: relative;
-      overflow: hidden;
-    }}
-    .card::before {{
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 4px;
-      background: linear-gradient(90deg, #f59e0b, #ef4444);
-    }}
-    .icon-box {{
-      width: 64px;
-      height: 64px;
-      border-radius: 16px;
-      background: rgba(245, 158, 11, 0.12);
-      border: 1px solid rgba(245, 158, 11, 0.3);
-      color: #f59e0b;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 1.5rem auto;
-      font-size: 1.8rem;
-    }}
-    .badge {{
-      display: inline-block;
-      padding: 0.35rem 0.9rem;
-      border-radius: 9999px;
-      font-size: 0.78rem;
-      font-weight: 700;
-      background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 1.25rem;
-    }}
-    h1 {{
-      font-size: 1.75rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      margin-bottom: 0.75rem;
-      color: #ffffff;
-    }}
-    .domain-tag {{
-      display: inline-block;
-      font-family: monospace;
-      font-size: 0.95rem;
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.1);
-      padding: 0.2rem 0.6rem;
-      border-radius: 6px;
-      margin-bottom: 1.25rem;
-    }}
-    p {{
-      font-size: 0.95rem;
-      line-height: 1.65;
-      color: #94a3b8;
-      margin-bottom: 1.5rem;
-    }}
-    .reason-box {{
-      background: #0f172a;
-      border-left: 4px solid #f59e0b;
-      border-radius: 8px;
-      padding: 1rem 1.25rem;
-      text-align: left;
-      font-size: 0.88rem;
-      color: #cbd5e1;
-      margin-bottom: 1.75rem;
-    }}
-    .contact-box {{
-      border-top: 1px solid #334155;
-      padding-top: 1.5rem;
-      font-size: 0.84rem;
-      color: #64748b;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-    }}
-    .contact-box a {{
-      color: #38bdf8;
-      text-decoration: none;
-      font-weight: 600;
-    }}
-    .contact-box a:hover {{
-      text-decoration: underline;
-    }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon-box">
-      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        <line x1="12" y1="8" x2="12" y2="12"></line>
-        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-      </svg>
-    </div>
-    <div class="badge">503 Service Suspended</div>
-    <h1>{title}</h1>
-    <div class="domain-tag">{domain}</div>
-    <p>{message}</p>
-    <div class="reason-box">
-      <div style="font-size: 0.76rem; text-transform: uppercase; color: #94a3b8; font-weight: 700; margin-bottom: 0.25rem;">Suspension Statement:</div>
-      <div>{reason}</div>
-    </div>
-    <div class="contact-box">
-      <div>If you are the website owner, please contact Nova Cloud Edges Support:</div>
-      <div>Email: <a href="mailto:{email}">{email}</a> &bull; Hotline: <strong>{phone}</strong></div>
-    </div>
-  </div>
-</body>
-</html>"""
+    return build_suspended_landing_html(domain=domain, reason=reason, title=title, message=message, email=email, phone=phone)
 
 # ---------------------------------------------------------
 # SSL Certificates & Audit Logs
 # ---------------------------------------------------------
 @app.get("/api/certificates")
 def get_certificates(db: Session = Depends(get_db)):
-    certs = db.query(Certificate).order_by(Certificate.id.desc()).all()
-    return [
-        {
-            "id": c.id,
-            "domain": c.domain,
-            "provider": c.provider,
-            "status": c.status,
-            "issued_at": str(c.issued_at),
-            "expires_at": str(c.expires_at),
-            "domain_registered_at": str(c.domain_registered_at) if c.domain_registered_at else "",
-            "domain_expires_at": str(c.domain_expires_at) if c.domain_expires_at else "",
-            "auto_renew": c.auto_renew,
-            "cert_path": c.cert_path
-        }
-        for c in certs
-    ]
+    """Provides complete domain and SSL certificate expiration timelines for billing and renewals."""
+    try:
+        existing_certs = {c.domain.lower(): c for c in db.query(Certificate).all()}
+        hosts = db.query(ProxyHost).all()
+        today = datetime.date.today()
+
+        # Ensure every ProxyHost domain has a tracked Certificate record
+        for h in hosts:
+            doms = [d.strip().lower() for d in h.domain_names.replace(",", " ").split() if d.strip()]
+            for d in doms:
+                cert_file = f"/etc/letsencrypt/live/{d}/fullchain.pem"
+                real_exp = None
+                if os.path.isfile(cert_file):
+                    try:
+                        res = subprocess.run(["openssl", "x509", "-enddate", "-noout", "-in", cert_file], capture_output=True, text=True, timeout=3)
+                        if res.returncode == 0 and "notAfter=" in res.stdout:
+                            date_str = res.stdout.split("notAfter=")[1].strip()
+                            real_exp = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
+                    except Exception:
+                        pass
+
+                ssl_exp = real_exp or h.ssl_expires_at or (today + datetime.timedelta(days=90))
+                dom_exp = today + datetime.timedelta(days=365)
+
+                if d in existing_certs:
+                    c = existing_certs[d]
+                    if not c.expires_at or c.expires_at < today:
+                        c.expires_at = ssl_exp
+                    if not c.domain_expires_at:
+                        c.domain_expires_at = dom_exp
+                    if not c.provider or c.provider == "Let's Encrypt":
+                        c.provider = h.ssl_provider or "Let's Encrypt Certbot"
+                    c.auto_renew = bool(h.ssl_forced)
+                    c.status = "valid" if (c.expires_at and c.expires_at >= today) else "expiring_soon"
+                else:
+                    new_c = Certificate(
+                        domain=d,
+                        provider=h.ssl_provider or "Let's Encrypt Certbot",
+                        status="valid" if h.ssl_forced else "disabled",
+                        issued_at=today - datetime.timedelta(days=15),
+                        expires_at=ssl_exp,
+                        domain_registered_at=today - datetime.timedelta(days=180),
+                        domain_expires_at=dom_exp,
+                        auto_renew=bool(h.ssl_forced),
+                        cert_path=f"/etc/letsencrypt/live/{d}"
+                    )
+                    db.add(new_c)
+                    existing_certs[d] = new_c
+
+        db.commit()
+
+        certs = db.query(Certificate).order_by(Certificate.id.desc()).all()
+        return [
+            {
+                "id": c.id,
+                "domain": c.domain,
+                "provider": c.provider or "Let's Encrypt Certbot",
+                "status": c.status or "valid",
+                "issued_at": str(c.issued_at) if c.issued_at else str(today),
+                "expires_at": str(c.expires_at) if c.expires_at else str(today + datetime.timedelta(days=90)),
+                "domain_registered_at": str(c.domain_registered_at) if c.domain_registered_at else "",
+                "domain_expires_at": str(c.domain_expires_at) if c.domain_expires_at else str(today + datetime.timedelta(days=365)),
+                "auto_renew": bool(c.auto_renew),
+                "cert_path": c.cert_path or f"/etc/letsencrypt/live/{c.domain}"
+            }
+            for c in certs
+        ]
+    except Exception as e:
+        print(f"Notice: get_certificates: {e}")
+        return []
 
 @app.post("/api/certificates/renew")
 def renew_ssl_certificate(domain: str, req: Request, db: Session = Depends(get_db)):

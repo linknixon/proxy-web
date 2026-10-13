@@ -12,6 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeRole = localStorage.getItem('nova_role') || 'super_admin';
   let globalRolePermissions = {};
 
+  function isSuperAdminRole(role) {
+    if (!role) return false;
+    const r = String(role).trim().toLowerCase();
+    return r === 'super_admin' || r === 'superadmin' || r === 'admin';
+  }
+
   // -----------------------------------------------------
   // User Authentication & 10-Minute Inactivity Auto-Logout
   // -----------------------------------------------------
@@ -254,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Check permissions from dynamic matrix (fallback to role defaults)
     const perms = (globalRolePermissions && globalRolePermissions[role]) ? globalRolePermissions[role] : [];
-    const isSuperAdmin = (role === 'super_admin');
+    const isSuperAdmin = isSuperAdminRole(role);
 
     // UFW tab visibility
     if (tabUfwBtn) {
@@ -699,10 +705,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const isDomainMgr = (activeRole === 'domain_manager' || h.can_edit_nginx_only);
-      const canEdit = activeRole === 'super_admin';
-      const canSuspend = activeRole === 'super_admin';
-      const canDelete = activeRole === 'super_admin';
-      const canExport = activeRole === 'super_admin';
+      const canEdit = isSuperAdminRole(activeRole);
+      const canSuspend = isSuperAdminRole(activeRole);
+      const canDelete = isSuperAdminRole(activeRole);
+      const canExport = isSuperAdminRole(activeRole);
 
       return `
         <tr>
@@ -817,18 +823,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // Toggle Suspension
   // -----------------------------------------------------
   window.toggleHostSuspension = async function(id) {
-    if (activeRole !== 'super_admin') {
-      showToast('Permission denied: Only Super Admin can suspend domains', 'error');
+    if (!isSuperAdminRole(activeRole)) {
+      showToast('Permission denied: Only Super Admin can suspend or unsuspend domains', 'error');
       loadHosts();
       return;
     }
     try {
-      const res = await fetch(`/api/hosts/${id}/toggle-suspend`, { method: 'POST' });
+      const res = await fetch(`/api/hosts/${id}/toggle-suspend`, {
+        method: 'POST',
+        headers: {
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+          'X-User-Role': activeRole
+        }
+      });
       const data = await res.json();
-      showToast(data.message, data.is_suspended ? 'warning' : 'success');
+      if (res.ok) {
+        showToast(data.message || (data.is_suspended ? 'Domain suspended' : 'Domain activated'), data.is_suspended ? 'warning' : 'success');
+      } else {
+        showToast(data.detail || 'Failed to toggle domain suspension status', 'error');
+      }
       loadHosts();
     } catch (err) {
       showToast('Failed to toggle host status', 'error');
+      loadHosts();
     }
   };
 
@@ -836,7 +853,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Delete Host
   // -----------------------------------------------------
   window.deleteHost = async function(id, domain) {
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can delete hosts', 'error');
       return;
     }
@@ -844,9 +861,19 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     try {
-      const res = await fetch(`/api/hosts/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/hosts/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+          'X-User-Role': activeRole
+        }
+      });
       const data = await res.json();
-      showToast(data.message, 'success');
+      if (res.ok) {
+        showToast(data.message || 'Host deleted successfully', 'success');
+      } else {
+        showToast(data.detail || 'Failed to delete host', 'error');
+      }
       loadHosts();
     } catch (err) {
       showToast('Failed to delete proxy host', 'error');
@@ -861,7 +888,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const hostModalTitle = document.getElementById('host-modal-title');
 
   document.getElementById('btn-open-create-modal').addEventListener('click', () => {
-    if (activeRole !== 'super_admin' && activeRole !== 'webmaster') {
+    if (!isSuperAdminRole(activeRole) && activeRole !== 'webmaster') {
       showToast('Permission denied: Your role cannot add domains', 'error');
       return;
     }
@@ -887,7 +914,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.openEditHostModal = function(id) {
-    if (activeRole !== 'super_admin' && activeRole !== 'domain_manager') {
+    if (!isSuperAdminRole(activeRole) && activeRole !== 'domain_manager') {
       showToast('Permission denied: Only Super Admin and Domain Managers can edit hosts', 'error');
       return;
     }
@@ -936,7 +963,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const editId = document.getElementById('edit-host-id').value;
 
-    if (editId && activeRole !== 'super_admin' && activeRole !== 'domain_manager') {
+    if (editId && !isSuperAdminRole(activeRole) && activeRole !== 'domain_manager') {
       showToast('Permission denied: Only Super Admin and Domain Managers can edit configurations', 'error');
       return;
     }
@@ -1245,7 +1272,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.openEditUfwModal = function(id) {
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can manage UFW', 'error');
       return;
     }
@@ -1268,7 +1295,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   document.getElementById('btn-open-ufw-modal').addEventListener('click', () => {
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can manage UFW', 'error');
       return;
     }
@@ -1331,7 +1358,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (quickUfwForm) {
     quickUfwForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can manage firewall', 'error');
         return;
       }
@@ -1420,10 +1447,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const USERS_PER_PAGE = 10;
 
   async function loadUsers() {
-    if (activeRole !== 'super_admin') return;
+    if (!isSuperAdminRole(activeRole)) return;
     try {
       const res = await fetch('/api/users', {
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
+        headers: {
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+          'X-User-Role': activeRole
+        }
       });
       if (!res.ok) {
         if (res.status === 403) {
@@ -1576,7 +1606,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.getElementById('btn-open-user-modal').addEventListener('click', () => {
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can add users', 'error');
       return;
     }
@@ -1594,7 +1624,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.openEditUserModal = async function(id) {
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can edit users', 'error');
       return;
     }
@@ -1751,7 +1781,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExportAllZip = document.getElementById('btn-export-all-zip');
   if (btnExportAllZip) {
     btnExportAllZip.addEventListener('click', () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Restricted Action: Exporting Nginx backup archives is only permitted for Super Admin.', 'error');
         return;
       }
@@ -1771,7 +1801,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnOpenMigrate) {
     btnOpenMigrate.addEventListener('click', () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Restricted Action: Importing and migrating server configs is only permitted for Super Admin.', 'error');
         return;
       }
@@ -1800,7 +1830,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (migrateForm) {
     migrateForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Restricted Action: Importing server configurations is only permitted for Super Admin.', 'error');
         return;
       }
@@ -1856,7 +1886,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnAutoSyncNginx = document.getElementById('btn-auto-sync-nginx');
   if (btnAutoSyncNginx) {
     btnAutoSyncNginx.addEventListener('click', async () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can sync host configurations.', 'error');
         return;
       }
@@ -1867,7 +1897,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const res = await fetch('/api/nginx/auto-sync', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${sessionToken}`,
+            'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
             'X-User-Role': activeRole
           }
         });
@@ -1890,7 +1920,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearDemoHosts = document.getElementById('btn-clear-demo-hosts');
   if (btnClearDemoHosts) {
     btnClearDemoHosts.addEventListener('click', async () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can manage host inventory.', 'error');
         return;
       }
@@ -1901,7 +1931,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const res = await fetch('/api/nginx/clear-demo-hosts', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${sessionToken}`,
+            'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
             'X-User-Role': activeRole
           }
         });
@@ -1917,7 +1947,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSyncHostUfw = document.getElementById('btn-sync-host-ufw');
   if (btnSyncHostUfw) {
     btnSyncHostUfw.addEventListener('click', async () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can manage UFW.', 'error');
         return;
       }
@@ -1958,14 +1988,41 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     const resultPre = document.getElementById('whois-result-pre');
-    resultPre.textContent = `Querying WHOIS records for ${domain}...`;
+    resultPre.textContent = `Querying live WHOIS records for ${domain}...`;
     try {
-      const res = await fetch(`/api/whois/${encodeURIComponent(domain)}`);
+      const res = await fetch(`/api/whois/${encodeURIComponent(domain)}`, {
+        headers: {
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+          'X-User-Role': activeRole
+        }
+      });
       const data = await res.json();
-      resultPre.textContent = JSON.stringify(data, null, 2);
-      showToast(`WHOIS query complete for ${domain}`);
+      if (!res.ok) {
+        resultPre.textContent = data.detail || 'Error querying WHOIS service';
+        showToast(data.detail || 'WHOIS query failed', 'error');
+        return;
+      }
+      const nameserversStr = Array.isArray(data.nameservers) ? data.nameservers.join(', ') : (data.nameservers || 'None listed');
+      const formatted = [
+        `Domain:          ${data.domain}`,
+        `IP Resolution:   ${data.ip_resolution}`,
+        `Registrar:       ${data.registrar}`,
+        `Registered On:   ${data.registered_on}`,
+        `Expires On:      ${data.expires_on}`,
+        `Status:          ${data.status}`,
+        `Abuse Contact:   ${data.abuse_contact}`,
+        `Name Servers:    ${nameserversStr}`,
+        ``,
+        `======================================================`,
+        `RAW REGISTRY WHOIS RECORD`,
+        `======================================================`,
+        data.raw_record || 'No raw output provided by registry server.'
+      ].join('\n');
+      resultPre.textContent = formatted;
+      showToast(`WHOIS query complete for ${domain}`, 'success');
     } catch (err) {
-      resultPre.textContent = 'Error querying WHOIS service';
+      resultPre.textContent = 'Error querying WHOIS service: ' + err.message;
+      showToast('Error querying WHOIS service', 'error');
     }
   });
 
@@ -2166,7 +2223,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const suspensionForm = document.getElementById('suspension-settings-form');
   suspensionForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (activeRole !== 'super_admin') {
+    if (!isSuperAdminRole(activeRole)) {
       showToast('Permission denied: Only Super Admin can modify suspension statement', 'error');
       return;
     }
@@ -2180,13 +2237,22 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/api/suspension-settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+          'X-User-Role': activeRole
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      showToast(data.message, 'success');
+      if (res.ok) {
+        showToast(data.message || 'Suspension statement saved successfully', 'success');
+        loadSuspensionSettings();
+      } else {
+        showToast(data.detail || 'Failed to update suspension statement', 'error');
+      }
     } catch (err) {
-      showToast('Failed to update suspension statement', 'error');
+      showToast('Failed to update suspension statement: ' + err.message, 'error');
     }
   });
 
@@ -2208,8 +2274,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (hostInput) hostInput.value = data.smtp_host || '';
       if (portInput) portInput.value = data.smtp_port || 587;
       if (userInput) userInput.value = data.smtp_user || '';
-      if (passInput && data.smtp_pass) {
-        passInput.placeholder = '•••••••••••• (Configured)';
+      if (passInput) {
+        passInput.value = '';
+        if (data.smtp_pass) {
+          passInput.placeholder = '•••••••••••• (Configured)';
+        }
       }
       if (toInput) toInput.value = data.smtp_to_emails || '';
       if (tlsInput) tlsInput.value = data.smtp_encryption || 'starttls';
@@ -2234,15 +2303,15 @@ document.addEventListener('DOMContentLoaded', () => {
   if (smtpForm) {
     smtpForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can modify SMTP settings', 'error');
         return;
       }
+      const rawPass = (document.getElementById('smtp-pass-input').value || '').trim();
       const payload = {
         smtp_host: document.getElementById('smtp-host-input').value.trim(),
         smtp_port: parseInt(document.getElementById('smtp-port-input').value, 10) || 587,
         smtp_user: document.getElementById('smtp-user-input').value.trim(),
-        smtp_pass: document.getElementById('smtp-pass-input').value,
         smtp_to_emails: document.getElementById('smtp-to-input').value.trim(),
         smtp_encryption: document.getElementById('smtp-tls-input').value,
         smtp_trigger_ufw: document.getElementById('trigger-ufw').checked,
@@ -2251,21 +2320,29 @@ document.addEventListener('DOMContentLoaded', () => {
         smtp_trigger_domain_expiry: document.getElementById('trigger-domain').checked,
         smtp_trigger_suspension: document.getElementById('trigger-suspension').checked
       };
+      if (rawPass) {
+        payload.smtp_pass = rawPass;
+      }
 
       try {
         const res = await fetch('/api/smtp-settings', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+            'X-User-Role': activeRole
+          },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
           showToast(data.message || 'SMTP settings updated', 'success');
+          loadSmtpSettings();
         } else {
           showToast(data.detail || 'Failed to update SMTP settings', 'error');
         }
       } catch (err) {
-        showToast('Failed to save SMTP settings', 'error');
+        showToast('Failed to save SMTP settings: ' + err.message, 'error');
       }
     });
   }
@@ -2280,7 +2357,11 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch('/api/smtp/test', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+            'X-User-Role': activeRole
+          },
           body: JSON.stringify({ test_email: recipient })
         });
         const data = await res.json();
@@ -2898,7 +2979,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSaveRoleMatrix = document.getElementById('btn-save-role-matrix');
   if (btnSaveRoleMatrix) {
     btnSaveRoleMatrix.addEventListener('click', async () => {
-      if (activeRole !== 'super_admin') {
+      if (!isSuperAdminRole(activeRole)) {
         showToast('Permission denied: Only Super Admin can modify role features', 'error');
         return;
       }
