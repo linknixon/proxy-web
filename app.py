@@ -90,6 +90,10 @@ class ProxyHost(Base):
     id = Column(Integer, primary_key=True, index=True)
     domain_names = Column(String(255), nullable=False)
     app_name = Column(String(150), default="Web Application", nullable=True)
+    host_type = Column(String(30), default="proxy", nullable=False)  # "proxy", "lemp", "static"
+    root_path = Column(String(255), nullable=True)  # e.g. /var/www/site.com/public
+    php_version = Column(String(20), default="auto", nullable=True)  # "auto", "8.3", "8.2", "8.1", etc.
+    php_fpm_socket = Column(String(255), nullable=True)  # e.g. unix:/run/php/php8.2-fpm.sock or 127.0.0.1:9000
     forward_scheme = Column(String(10), default="http", nullable=False)
     forward_host = Column(String(255), default="127.0.0.1", nullable=False)
     forward_port = Column(Integer, default=8080, nullable=False)
@@ -231,6 +235,10 @@ def auto_migrate_schema():
             # 2. proxy_hosts table
             if "proxy_hosts" in existing_tables:
                 safe_add_column("proxy_hosts", "app_name", "VARCHAR(150) DEFAULT 'Web Application'")
+                safe_add_column("proxy_hosts", "host_type", "VARCHAR(30) NOT NULL DEFAULT 'proxy'")
+                safe_add_column("proxy_hosts", "root_path", "VARCHAR(255) NULL")
+                safe_add_column("proxy_hosts", "php_version", "VARCHAR(20) DEFAULT 'auto'")
+                safe_add_column("proxy_hosts", "php_fpm_socket", "VARCHAR(255) NULL")
                 safe_add_column("proxy_hosts", "forward_scheme", "VARCHAR(10) NOT NULL DEFAULT 'http'")
                 safe_add_column("proxy_hosts", "forward_host", "VARCHAR(255) NOT NULL DEFAULT '127.0.0.1'")
                 safe_add_column("proxy_hosts", "forward_port", "INT NOT NULL DEFAULT 8080")
@@ -293,6 +301,10 @@ def get_db():
 class ProxyHostCreate(BaseModel):
     domain_names: str = Field(..., example="example.com, www.example.com")
     app_name: Optional[str] = Field("Web Application", example="Main Web Portal")
+    host_type: Optional[str] = Field("proxy", example="proxy")  # "proxy", "lemp", "static"
+    root_path: Optional[str] = Field(None, example="/var/www/example.com/public")
+    php_version: Optional[str] = Field("auto", example="8.2")
+    php_fpm_socket: Optional[str] = Field(None, example="unix:/run/php/php8.2-fpm.sock")
     forward_scheme: str = Field("http", example="http")
     forward_host: str = Field("127.0.0.1", example="127.0.0.1")
     forward_port: int = Field(8080, example=8080)
@@ -305,6 +317,10 @@ class ProxyHostCreate(BaseModel):
 class ProxyHostUpdate(BaseModel):
     domain_names: Optional[str] = None
     app_name: Optional[str] = None
+    host_type: Optional[str] = None
+    root_path: Optional[str] = None
+    php_version: Optional[str] = None
+    php_fpm_socket: Optional[str] = None
     forward_scheme: Optional[str] = None
     forward_host: Optional[str] = None
     forward_port: Optional[int] = None
@@ -624,9 +640,150 @@ def verify_password(plain: str, stored_hash: str) -> bool:
             return hashlib.sha256(f"{salt}:{plain}".encode("utf-8")).hexdigest() == h
     return False
 
-# Token sessions with disk persistence (10-minute inactivity expiration)
-SESSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_sessions.json")
-SESSION_EXPIRY_SECONDS = 600
+def ensure_default_admin(db: Optional[Session] = None):
+    """Guarantees a default super_admin account exists in the database for zero-friction setup."""
+    close_db = False
+    if db is None:
+        try:
+            db = SessionLocal()
+            close_db = True
+        except Exception:
+            return
+    try:
+        admin_user = db.query(User).filter(User.username.in_(["admin", "superadmin"])).first()
+        if not admin_user:
+            count = db.query(User).count()
+            if count == 0:
+                default_user = os.getenv("ADMIN_USER", "admin")
+                default_pass = os.getenv("ADMIN_PASS", "admin")
+                new_admin = User(
+                    username=default_user,
+                    full_name="System Administrator",
+                    email="admin@novacloudedges.com",
+                    role="super_admin",
+                    is_active=True,
+                    password_hash=hash_password(default_pass)
+                )
+                db.add(new_admin)
+                db.commit()
+                print("==================================================================")
+                print(f"[Init] Auto-created default administrator account:")
+                print(f"       Username: {default_user}")
+                print(f"       Password: {default_pass}")
+                print("==================================================================")
+    except Exception as e:
+        print(f"Notice: Default admin initialization: {e}")
+    finally:
+        if close_db and db:
+            db.close()
+
+def detect_host_php_runtimes() -> dict:
+    """
+    Scans the host system for installed PHP-FPM versions and Unix domain sockets or TCP ports.
+    Supports Ubuntu/Debian (/run/php/php*-fpm.sock), CentOS/RHEL/CloudPanel (/var/run/php-fpm/),
+    and default TCP fastcgi 127.0.0.1:9000.
+    """
+    detected = []
+    seen_versions = set()
+
+    # 1. Search socket directories
+    socket_dirs = ["/run/php", "/var/run/php", "/var/run/php-fpm", "/tmp"]
+    for sdir in socket_dirs:
+        if os.path.isdir(sdir):
+            try:
+                for fname in sorted(os.listdir(sdir)):
+                    if "fpm" in fname and fname.endswith(".sock"):
+                        sock_path = os.path.join(sdir, fname)
+                        m = re.search(r'php(\d+\.\d+)-fpm', fname)
+                        ver = m.group(1) if m else "default"
+                        detected.append({
+                            "version": ver,
+                            "socket": f"unix:{sock_path}",
+                            "path": sock_path,
+                            "type": "unix_socket"
+                        })
+                        seen_versions.add(ver)
+            except Exception:
+                pass
+
+    # 2. Check installed php CLI versions
+    for ver in ["8.4", "8.3", "8.2", "8.1", "8.0", "7.4"]:
+        if ver not in seen_versions:
+            cand_sock = f"/run/php/php{ver}-fpm.sock"
+            if os.path.exists(cand_sock):
+                detected.append({
+                    "version": ver,
+                    "socket": f"unix:{cand_sock}",
+                    "path": cand_sock,
+                    "type": "unix_socket"
+                })
+                seen_versions.add(ver)
+            elif shutil.which(f"php{ver}") or shutil.which(f"php-fpm{ver}"):
+                detected.append({
+                    "version": ver,
+                    "socket": f"unix:/run/php/php{ver}-fpm.sock",
+                    "path": f"/run/php/php{ver}-fpm.sock",
+                    "type": "cli_detected"
+                })
+                seen_versions.add(ver)
+
+    # 3. Check generic php binary if nothing found
+    if not detected and shutil.which("php"):
+        try:
+            p = subprocess.run(["php", "-r", "echo PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;"], capture_output=True, text=True, timeout=3)
+            if p.returncode == 0 and p.stdout.strip():
+                cur_ver = p.stdout.strip()
+                detected.append({
+                    "version": cur_ver,
+                    "socket": f"unix:/run/php/php{cur_ver}-fpm.sock",
+                    "path": f"/run/php/php{cur_ver}-fpm.sock",
+                    "type": "system_php"
+                })
+        except Exception:
+            pass
+
+    # Standard fallback defaults if no socket found
+    if not detected:
+        detected = [
+            {"version": "8.3", "socket": "unix:/run/php/php8.3-fpm.sock", "path": "/run/php/php8.3-fpm.sock", "type": "standard_path"},
+            {"version": "8.2", "socket": "unix:/run/php/php8.2-fpm.sock", "path": "/run/php/php8.2-fpm.sock", "type": "standard_path"},
+            {"version": "8.1", "socket": "unix:/run/php/php8.1-fpm.sock", "path": "/run/php/php8.1-fpm.sock", "type": "standard_path"},
+            {"version": "7.4", "socket": "unix:/run/php/php7.4-fpm.sock", "path": "/run/php/php7.4-fpm.sock", "type": "standard_path"},
+        ]
+
+    detected.sort(key=lambda x: x["version"], reverse=True)
+    default_sock = detected[0]["socket"] if detected else "unix:/run/php/php8.2-fpm.sock"
+    default_ver = detected[0]["version"] if detected else "8.2"
+
+    return {
+        "runtimes": detected,
+        "default_version": default_ver,
+        "default_socket": default_sock
+    }
+
+def resolve_php_fpm_socket(php_version: Optional[str], custom_socket: Optional[str]) -> str:
+    """Resolves correct PHP-FPM fastcgi_pass destination (socket path or TCP host:port)."""
+    if custom_socket and custom_socket.strip():
+        val = custom_socket.strip()
+        if not val.startswith("unix:") and not ":" in val and val.startswith("/"):
+            return f"unix:{val}"
+        return val
+
+    ver = (php_version or "auto").strip().lower()
+    info = detect_host_php_runtimes()
+
+    if ver == "auto" or not ver:
+        return info["default_socket"]
+
+    for r in info["runtimes"]:
+        if r["version"] == ver:
+            return r["socket"]
+
+    return f"unix:/run/php/php{ver}-fpm.sock"
+
+# Token sessions with disk persistence (stored in OS temp directory so uvicorn reloading is not triggered)
+SESSIONS_FILE = os.path.join(tempfile.gettempdir(), "nova_active_sessions.json")
+SESSION_EXPIRY_SECONDS = 86400  # 24 hours
 
 def _load_persisted_sessions() -> dict:
     if not os.path.exists(SESSIONS_FILE):
@@ -646,7 +803,7 @@ def _load_persisted_sessions() -> dict:
                 pass
         return valid
     except Exception as e:
-        logger.warning(f"Could not load persisted sessions: {e}")
+        print(f"Notice: Could not load persisted sessions: {e}")
         return {}
 
 def _save_persisted_sessions():
@@ -654,14 +811,22 @@ def _save_persisted_sessions():
         now = datetime.datetime.utcnow()
         serializable = {}
         for token, sess in list(ACTIVE_SESSIONS.items()):
-            if (now - sess["last_active"]).total_seconds() <= SESSION_EXPIRY_SECONDS:
+            last_active = sess["last_active"]
+            if isinstance(last_active, str):
+                try:
+                    last_active = datetime.datetime.fromisoformat(last_active)
+                except Exception:
+                    last_active = now
+            if (now - last_active).total_seconds() <= SESSION_EXPIRY_SECONDS:
                 item = dict(sess)
-                item["last_active"] = sess["last_active"].isoformat()
+                item["last_active"] = last_active.isoformat()
                 serializable[token] = item
-        with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
+        tmp_path = SESSIONS_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f)
+        os.replace(tmp_path, SESSIONS_FILE)
     except Exception as e:
-        logger.warning(f"Could not persist active sessions: {e}")
+        print(f"Notice: Could not persist active sessions: {e}")
 
 ACTIVE_SESSIONS = _load_persisted_sessions()
 
@@ -688,13 +853,34 @@ def get_session_user(req: Request) -> Optional[dict]:
         token = req.headers["X-Auth-Token"].strip()
     elif "token" in req.query_params:
         token = req.query_params["token"].strip()
+    elif req.cookies.get("nova_session"):
+        token = req.cookies.get("nova_session").strip()
+    elif req.cookies.get("nova_token"):
+        token = req.cookies.get("nova_token").strip()
 
-    if not token or token not in ACTIVE_SESSIONS:
+    if not token:
+        return None
+
+    # If token not present in memory cache, re-read from disk to support multi-process workers
+    if token not in ACTIVE_SESSIONS:
+        persisted = _load_persisted_sessions()
+        ACTIVE_SESSIONS.update(persisted)
+
+    if token not in ACTIVE_SESSIONS:
         return None
 
     sess = ACTIVE_SESSIONS[token]
+    last_active = sess["last_active"]
+    if isinstance(last_active, str):
+        try:
+            last_active = datetime.datetime.fromisoformat(last_active)
+            sess["last_active"] = last_active
+        except Exception:
+            last_active = datetime.datetime.utcnow()
+            sess["last_active"] = last_active
+
     now = datetime.datetime.utcnow()
-    if (now - sess["last_active"]).total_seconds() > SESSION_EXPIRY_SECONDS:
+    if (now - last_active).total_seconds() > SESSION_EXPIRY_SECONDS:
         del ACTIVE_SESSIONS[token]
         _save_persisted_sessions()
         return None
@@ -1090,8 +1276,12 @@ server {{
     exploit_block = ""
     if host.block_exploits:
         exploit_block = """
-    # Block Common Exploits & Hidden Files
+    # Block Common Exploits & Sensitive Files
     location ~ /\\.(ht|git|env|svn) {
+        deny all;
+        return 404;
+    }
+    location ~* /(wp-config\\.php|composer\\.json|composer\\.lock|package\\.json|package-lock\\.json|\\.env) {
         deny all;
         return 404;
     }
@@ -1101,20 +1291,109 @@ server {{
     if ($query_string ~* "base64_(en|de)code[^(]*\\(") { return 403; }
 """
 
+    # If custom config is a complete valid server block, return it directly without nesting
+    if not host.is_suspended and host.custom_nginx_config and host.custom_nginx_config.strip():
+        cleaned_custom = host.custom_nginx_config.strip()
+        if re.search(r'\bserver\s*\{', cleaned_custom, re.IGNORECASE):
+            return cleaned_custom + "\n"
+
     custom_block = ""
     if host.custom_nginx_config and host.custom_nginx_config.strip():
-        custom_block = f"""
-    # Custom Directives
-{host.custom_nginx_config}
-"""
+        # Clean and indent custom directives; ensure allow precedes deny all for Nginx syntax
+        raw_lines = [l.strip() for l in host.custom_nginx_config.strip().splitlines() if l.strip()]
+        allows = [l for l in raw_lines if re.match(r'^allow\s+', l, re.IGNORECASE)]
+        denies = [l for l in raw_lines if re.match(r'^deny\s+', l, re.IGNORECASE)]
+        others = [l for l in raw_lines if l not in allows and l not in denies]
+        ordered_lines = others + allows + denies if (allows and denies) else raw_lines
+        indented = [f"    {l}" for l in ordered_lines]
+        custom_block = "\n    # Custom Directives & Access Rules\n" + "\n".join(indented) + "\n"
 
-    target_url = f"{host.forward_scheme}://{host.forward_host}:{host.forward_port}"
+    # Stack Architecture Dispatch: LEMP vs Static vs Reverse Proxy
+    h_type = (getattr(host, "host_type", None) or "proxy").strip().lower()
+    root_val = (getattr(host, "root_path", None) or "").strip()
+    php_ver = (getattr(host, "php_version", None) or "auto").strip()
+    php_sock = (getattr(host, "php_fpm_socket", None) or "").strip()
+
+    if h_type == "lemp":
+        root_dir = root_val if root_val else f"/var/www/{primary_domain}/public"
+        fpm_destination = resolve_php_fpm_socket(php_ver, php_sock)
+        stack_title = f"LEMP Stack (PHP-FPM) | Root: {root_dir} | FastCGI: {fpm_destination}"
+        stack_content = f"""
+    # LEMP Stack - Document Root & Directory Indexing
+    root {root_dir};
+    index index.php index.html index.htm;
+    client_max_body_size 64M;
+
+    # Primary Routing Engine (Supports WordPress, Laravel, Symfony, Custom PHP)
+    location / {{
+        try_files $uri $uri/ /index.php?$query_string;
+    }}
+
+    # PHP-FPM FastCGI Execution Handler
+    location ~ \\.php$ {{
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+        fastcgi_pass {fpm_destination};
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param HTTP_PROXY ""; # HTTPoxy vulnerability defense
+        include fastcgi_params;
+        fastcgi_buffer_size 32k;
+        fastcgi_buffers 16 16k;
+        fastcgi_connect_timeout 60s;
+        fastcgi_send_timeout 300s;
+        fastcgi_read_timeout 300s;
+    }}
+
+    # Static Media & Browser Cache Optimization
+    location ~* \\.(jpg|jpeg|gif|png|css|js|ico|webp|tiff|ttf|svg|eot|woff|woff2)$ {{
+        expires 30d;
+        access_log off;
+        add_header Cache-Control "public, no-transform";
+    }}"""
+    elif h_type == "static":
+        root_dir = root_val if root_val else f"/var/www/{primary_domain}"
+        stack_title = f"Static Web Site | Root: {root_dir}"
+        stack_content = f"""
+    # Static Site Document Root
+    root {root_dir};
+    index index.html index.htm;
+
+    # SPA / Static Fallback Routing
+    location / {{
+        try_files $uri $uri/ /index.html;
+    }}
+
+    # Static Media & Browser Cache Optimization
+    location ~* \\.(jpg|jpeg|gif|png|css|js|ico|webp|tiff|ttf|svg|eot|woff|woff2)$ {{
+        expires 30d;
+        access_log off;
+        add_header Cache-Control "public, no-transform";
+    }}"""
+    else:
+        # Default: Reverse Proxy / CloudPanel Upstream
+        target_url = f"{host.forward_scheme}://{host.forward_host}:{host.forward_port}"
+        stack_title = f"Reverse Proxy Upstream | Target: {target_url}"
+        stack_content = f"""
+    location / {{
+        proxy_pass {target_url};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+{ws_block}
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }}"""
 
     if host.ssl_forced and has_ssl:
         config = f"""# ========================================================
 # Nova Proxy Admin - Virtual Host Configuration
 # Domain(s): {domains}
-# Target: {target_url}
+# Architecture: {stack_title}
 # ========================================================
 
 # 1. HTTP Redirect to HTTPS
@@ -1133,7 +1412,7 @@ server {{
     }}
 }}
 
-# 2. Main HTTPS Reverse Proxy Server Block
+# 2. Main HTTPS Virtual Host Server Block
 server {{
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -1148,21 +1427,8 @@ server {{
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 {exploit_block}
-    location / {{
-        proxy_pass {target_url};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port $server_port;
-{ws_block}
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }}
-{custom_block}
-}}
+{stack_content}
+{custom_block}}}
 """
     else:
         ssl_note = ""
@@ -1170,9 +1436,9 @@ server {{
             ssl_note = f"\n# Notice: SSL enforced in database, but certificate files ({cert_path}) not yet on disk.\n# Serving HTTP port 80 until Certbot provisions certificates."
 
         config = f"""# ========================================================
-# Nova Proxy Admin - HTTP Reverse Proxy Virtual Host{ssl_note}
+# Nova Proxy Admin - HTTP Virtual Host Configuration{ssl_note}
 # Domain(s): {domains}
-# Target: {target_url}
+# Architecture: {stack_title}
 # ========================================================
 
 server {{
@@ -1180,16 +1446,8 @@ server {{
     listen [::]:80;
     server_name {domains};
 {exploit_block}
-    location / {{
-        proxy_pass {target_url};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-{ws_block}
-    }}
-{custom_block}
-}}
+{stack_content}
+{custom_block}}}
 """
     return config
 
@@ -1231,7 +1489,7 @@ def find_host_nginx_config_file(domain_names: str) -> Optional[str]:
 def write_and_reload_nginx_host(host: ProxyHost, db: Session) -> dict:
     """
     Writes the active or suspended Nginx configuration for the given host
-    to the host filesystem and safely reloads Nginx.
+    to the host filesystem and safely reloads Nginx while preserving existing configs.
     """
     if platform.system() != "Linux" or not os.path.isdir("/etc/nginx"):
         return {"status": "skipped", "message": "Host system is not Linux or /etc/nginx is missing"}
@@ -1253,8 +1511,33 @@ def write_and_reload_nginx_host(host: ProxyHost, db: Session) -> dict:
         else:
             return {"status": "error", "message": "Cannot determine Nginx sites configuration directory"}
 
-    conf_content = generate_nginx_config(host, db)
+    live_backup_path = target_path + ".nova_live"
     backup_path = target_path + ".bak_nova"
+
+    # If suspending, backup live untouched configuration first
+    if host.is_suspended and os.path.isfile(target_path) and not os.path.isfile(live_backup_path):
+        try:
+            shutil.copy2(target_path, live_backup_path)
+        except Exception:
+            pass
+
+    # If unsuspending and live backup exists, restore it directly
+    if not host.is_suspended and os.path.isfile(live_backup_path):
+        try:
+            shutil.copy2(live_backup_path, target_path)
+            t_res = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=8)
+            if t_res.returncode == 0:
+                os.remove(live_backup_path)
+                subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, text=True, timeout=8)
+                return {
+                    "status": "success",
+                    "message": f"{primary_domain} unsuspended and original live configuration restored",
+                    "file": target_path
+                }
+        except Exception:
+            pass
+
+    conf_content = generate_nginx_config(host, db)
 
     if os.path.isfile(target_path):
         try:
@@ -1266,14 +1549,22 @@ def write_and_reload_nginx_host(host: ProxyHost, db: Session) -> dict:
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(conf_content)
 
-        # If written to sites-available, ensure enabled symlink in sites-enabled
+        # If written to sites-available, verify if already enabled before creating symlink
         if "/sites-available/" in target_path and os.path.isdir("/etc/nginx/sites-enabled"):
-            symlink_path = os.path.join("/etc/nginx/sites-enabled", os.path.basename(target_path))
-            if not os.path.exists(symlink_path) and not os.path.islink(symlink_path):
-                try:
-                    os.symlink(target_path, symlink_path)
-                except Exception as sym_err:
-                    print(f"Notice: Symlink creation for {symlink_path}: {sym_err}")
+            real_target = os.path.realpath(target_path)
+            already_enabled = False
+            for entry in os.listdir("/etc/nginx/sites-enabled"):
+                entry_p = os.path.join("/etc/nginx/sites-enabled", entry)
+                if os.path.realpath(entry_p) == real_target:
+                    already_enabled = True
+                    break
+            if not already_enabled:
+                symlink_path = os.path.join("/etc/nginx/sites-enabled", os.path.basename(target_path))
+                if not os.path.exists(symlink_path) and not os.path.islink(symlink_path):
+                    try:
+                        os.symlink(target_path, symlink_path)
+                    except Exception as sym_err:
+                        print(f"Notice: Symlink creation for {symlink_path}: {sym_err}")
 
         # Validate with nginx -t
         t_res = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=8)
@@ -1321,7 +1612,7 @@ def write_and_reload_nginx_host(host: ProxyHost, db: Session) -> dict:
 
 @app.get("/api/status")
 def get_system_status(db: Session = Depends(get_db)):
-    """Provides system diagnostics, MAMP MySQL connection, and counts."""
+    """Provides real-time host diagnostics, database connections, and system metrics."""
     db_ok = False
     try:
         db.execute(text("SELECT 1"))
@@ -1335,6 +1626,80 @@ def get_system_status(db: Session = Depends(get_db)):
     ssl_count = db.query(ProxyHost).filter(ProxyHost.ssl_forced == True).count() if db_ok else 0
     ufw_rules_count = db.query(UFWRule).filter(UFWRule.is_active == True).count() if db_ok else 0
 
+    # 1. Real host Nginx inspection
+    nginx_status = "stopped"
+    nginx_version = "nginx"
+    try:
+        ng_bin = shutil.which("nginx") or ("/usr/sbin/nginx" if os.path.isfile("/usr/sbin/nginx") else None)
+        if ng_bin:
+            res = subprocess.run([ng_bin, "-v"], capture_output=True, text=True, timeout=2)
+            out_v = res.stderr or res.stdout or ""
+            m_v = re.search(r'nginx version:\s*(.+)', out_v)
+            if m_v:
+                nginx_version = m_v.group(1).strip()
+            elif out_v.strip():
+                nginx_version = out_v.strip().splitlines()[0]
+        else:
+            nginx_version = "nginx (system)"
+    except Exception:
+        pass
+
+    worker_processes = "auto"
+    try:
+        w_cnt = 0
+        for p in psutil.process_iter(['name', 'cmdline']):
+            pname = (p.info.get('name') or '').lower()
+            cmd = ' '.join(p.info.get('cmdline') or []).lower()
+            if 'nginx' in pname or 'nginx' in cmd:
+                nginx_status = "running"
+                if 'worker' in cmd:
+                    w_cnt += 1
+        if w_cnt > 0:
+            worker_processes = f"{w_cnt} workers"
+    except Exception:
+        pass
+
+    # 2. Real host active connections
+    active_conns = 0
+    try:
+        net_conns = psutil.net_connections(kind='inet')
+        active_conns = sum(1 for c in net_conns if c.status == 'ESTABLISHED' and (c.laddr.port in (80, 443, 8080, 8000) or (c.raddr and c.raddr.port in (80, 443))))
+        if active_conns == 0:
+            active_conns = sum(1 for c in net_conns if c.status == 'ESTABLISHED')
+    except Exception:
+        active_conns = 0
+
+    # 3. Real host uptime calculation
+    uptime_display = "Online"
+    try:
+        boot_ts = psutil.boot_time()
+        up_secs = int(datetime.datetime.now().timestamp() - boot_ts)
+        days = up_secs // 86400
+        hrs = (up_secs % 86400) // 3600
+        mins = (up_secs % 3600) // 60
+        if days > 0:
+            uptime_display = f"{days}d {hrs}h {mins}m"
+        else:
+            uptime_display = f"{hrs}h {mins}m"
+    except Exception:
+        pass
+
+    # 4. Real host UFW status
+    ufw_status = "inactive"
+    ufw_policy = "default"
+    try:
+        ufw_bin = shutil.which("ufw") or ("/usr/sbin/ufw" if os.path.isfile("/usr/sbin/ufw") else None)
+        if ufw_bin:
+            u_res = subprocess.run([ufw_bin, "status", "verbose"], capture_output=True, text=True, timeout=3)
+            if u_res.returncode == 0:
+                if "Status: active" in u_res.stdout:
+                    ufw_status = "active"
+                pol_m = re.search(r'Default:\s*([^\n\r]+)', u_res.stdout)
+                if pol_m:
+                    ufw_policy = pol_m.group(1).strip()
+    except Exception:
+        pass
+
     return {
         "status": "healthy" if db_ok else "degraded",
         "database": {
@@ -1344,15 +1709,15 @@ def get_system_status(db: Session = Depends(get_db)):
             "database_name": DB_NAME
         },
         "nginx": {
-            "status": "running",
-            "version": "nginx/1.24.0 (Ubuntu 22.04 LTS)",
-            "worker_processes": "auto",
-            "active_connections": 142
+            "status": nginx_status,
+            "version": nginx_version,
+            "worker_processes": worker_processes,
+            "active_connections": active_conns
         },
         "ufw": {
-            "status": "active",
+            "status": ufw_status,
             "active_rules_count": ufw_rules_count,
-            "default_policy": "incoming: deny, outgoing: allow"
+            "default_policy": ufw_policy
         },
         "stats": {
             "total_hosts": total_hosts,
@@ -1360,7 +1725,7 @@ def get_system_status(db: Session = Depends(get_db)):
             "suspended_hosts": suspended_hosts,
             "ssl_secured": ssl_count,
             "ufw_rules_count": ufw_rules_count,
-            "system_uptime": "99.98%"
+            "system_uptime": uptime_display
         }
     }
 
@@ -1368,7 +1733,7 @@ def get_system_status(db: Session = Depends(get_db)):
 # Authentication & User Sessions (10-Min Inactivity Timeout)
 # ---------------------------------------------------------
 @app.post("/api/auth/login")
-def login(data: LoginRequest, req: Request, db: Session = Depends(get_db)):
+def login(data: LoginRequest, req: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate user credentials and issue session token."""
     username = data.username.strip().lower()
     if username in ["admin", "root"]:
@@ -1384,6 +1749,15 @@ def login(data: LoginRequest, req: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     token = create_session(user)
+    response.set_cookie(
+        key="nova_session",
+        value=token,
+        max_age=SESSION_EXPIRY_SECONDS,
+        path="/",
+        samesite="lax",
+        httponly=False
+    )
+
     client_ip = req.client.host if req.client else "127.0.0.1"
     audit = AuditLog(
         action="AUTH_LOGIN",
@@ -1425,7 +1799,7 @@ def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
     return {"user": sess, "active": True}
 
 @app.post("/api/auth/logout")
-def logout(req: Request):
+def logout(req: Request, response: Response):
     """Terminates active session token."""
     auth_header = req.headers.get("Authorization") or ""
     token = ""
@@ -1435,10 +1809,14 @@ def logout(req: Request):
         token = req.headers["X-Auth-Token"].strip()
     elif "token" in req.query_params:
         token = req.query_params["token"].strip()
+    elif req.cookies.get("nova_session"):
+        token = req.cookies.get("nova_session").strip()
 
     if token and token in ACTIVE_SESSIONS:
         del ACTIVE_SESSIONS[token]
         _save_persisted_sessions()
+    
+    response.delete_cookie(key="nova_session", path="/")
     return {"message": "Signed out successfully."}
 
 @app.post("/api/auth/change-password")
@@ -1863,10 +2241,16 @@ def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optiona
             if not any(hd in allowed_list for hd in host_domains):
                 continue
 
+        ssl_exp_str = str(h.ssl_expires_at) if h.ssl_expires_at else ""
+
         result.append({
             "id": h.id,
             "domain_names": h.domain_names,
             "app_name": h.app_name or "Web Application",
+            "host_type": getattr(h, "host_type", "proxy") or "proxy",
+            "root_path": getattr(h, "root_path", "") or "",
+            "php_version": getattr(h, "php_version", "auto") or "auto",
+            "php_fpm_socket": getattr(h, "php_fpm_socket", "") or "",
             "forward_scheme": h.forward_scheme,
             "forward_host": h.forward_host,
             "forward_port": h.forward_port,
@@ -1875,7 +2259,7 @@ def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optiona
             "ssl_forced": bool(h.ssl_forced),
             "ssl_provider": h.ssl_provider,
             "ssl_status": h.ssl_status,
-            "ssl_expires_at": str(h.ssl_expires_at) if h.ssl_expires_at else "2027-01-01",
+            "ssl_expires_at": ssl_exp_str,
             "is_suspended": bool(h.is_suspended),
             "suspended_reason": h.suspended_reason or "Administrative Policy Suspension",
             "custom_nginx_config": h.custom_nginx_config,
@@ -1900,6 +2284,10 @@ def create_proxy_host(data: ProxyHostCreate, req: Request, db: Session = Depends
     host = ProxyHost(
         domain_names=clean_domains,
         app_name=app_name_val,
+        host_type=data.host_type or "proxy",
+        root_path=data.root_path.strip() if data.root_path else None,
+        php_version=data.php_version or "auto",
+        php_fpm_socket=data.php_fpm_socket.strip() if data.php_fpm_socket else None,
         forward_scheme=data.forward_scheme,
         forward_host=data.forward_host,
         forward_port=data.forward_port,
@@ -1917,17 +2305,19 @@ def create_proxy_host(data: ProxyHostCreate, req: Request, db: Session = Depends
     db.commit()
     db.refresh(host)
 
+    nginx_res = write_and_reload_nginx_host(host, db)
+
     client_ip = req.client.host if req.client else "127.0.0.1"
     audit = AuditLog(
         action="CREATE_HOST",
-        details=f"Created proxy host '{clean_domains}' ({app_name_val}) forwarding to {data.forward_scheme}://{data.forward_host}:{data.forward_port}",
+        details=f"Created {host.host_type.upper()} host '{clean_domains}' ({app_name_val})",
         status="success",
         client_ip=client_ip
     )
     db.add(audit)
     db.commit()
 
-    return {"message": "Proxy host created successfully", "host_id": host.id}
+    return {"message": "Proxy host created successfully", "host_id": host.id, "nginx_reload": nginx_res}
 
 @app.put("/api/hosts/{host_id}")
 def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Session = Depends(get_db)):
@@ -1965,6 +2355,14 @@ def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Ses
         host.domain_names = ", ".join([d.strip() for d in data.domain_names.split(",") if d.strip()])
     if data.app_name is not None:
         host.app_name = data.app_name.strip() if data.app_name.strip() else "Web Application"
+    if data.host_type is not None:
+        host.host_type = data.host_type
+    if data.root_path is not None:
+        host.root_path = data.root_path.strip() if data.root_path else None
+    if data.php_version is not None:
+        host.php_version = data.php_version
+    if data.php_fpm_socket is not None:
+        host.php_fpm_socket = data.php_fpm_socket.strip() if data.php_fpm_socket else None
     if data.forward_scheme is not None:
         host.forward_scheme = data.forward_scheme
     if data.forward_host is not None:
@@ -2115,7 +2513,7 @@ def get_host_nginx_config(host_id: int, db: Session = Depends(get_db)):
 # Nginx Backup & Server Migration Engine (Import & Export .conf)
 # ---------------------------------------------------------
 def parse_nginx_server_block(text: str) -> dict:
-    """Parses an Nginx server block to extract domain names, upstream targets, SSL, and features for server migration."""
+    """Parses an Nginx server block to extract domain names, upstream targets, root, PHP-FPM, SSL, and features for server migration."""
     domains = []
     server_name_match = re.search(r'server_name\s+([^;]+);', text, re.IGNORECASE)
     if server_name_match:
@@ -2132,6 +2530,24 @@ def parse_nginx_server_block(text: str) -> dict:
         forward_host = proxy_pass_match.group(2)
         forward_port = int(proxy_pass_match.group(3)) if proxy_pass_match.group(3) else (443 if forward_scheme == "https" else 80)
 
+    # Detect LEMP Stack / FastCGI vs Static vs Reverse Proxy
+    fastcgi_match = re.search(r'fastcgi_pass\s+([^;]+);', text, re.IGNORECASE)
+    root_match = re.search(r'root\s+([^;]+);', text, re.IGNORECASE)
+
+    host_type = "proxy"
+    root_path = root_match.group(1).strip() if root_match else None
+    php_version = "auto"
+    php_fpm_socket = None
+
+    if fastcgi_match:
+        host_type = "lemp"
+        php_fpm_socket = fastcgi_match.group(1).strip()
+        m_ver = re.search(r'php(\d+\.\d+)', php_fpm_socket)
+        if m_ver:
+            php_version = m_ver.group(1)
+    elif root_match and not proxy_pass_match:
+        host_type = "static"
+
     websocket_support = bool(re.search(r'Upgrade|http_upgrade', text, re.IGNORECASE))
     block_exploits = bool(re.search(r'\.git|\.env|deny\s+all', text, re.IGNORECASE))
     ssl_forced = bool(re.search(r'443\s+ssl|ssl_certificate|return\s+301\s+https', text, re.IGNORECASE))
@@ -2144,6 +2560,10 @@ def parse_nginx_server_block(text: str) -> dict:
 
     return {
         "domain_names": domain_names,
+        "host_type": host_type,
+        "root_path": root_path,
+        "php_version": php_version,
+        "php_fpm_socket": php_fpm_socket,
         "forward_scheme": forward_scheme,
         "forward_host": forward_host,
         "forward_port": forward_port,
@@ -2329,6 +2749,10 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
     existing = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{primary_domain}%")).first()
 
     if existing and payload.overwrite:
+        existing.host_type = parsed.get("host_type", "proxy")
+        existing.root_path = parsed.get("root_path")
+        existing.php_version = parsed.get("php_version", "auto")
+        existing.php_fpm_socket = parsed.get("php_fpm_socket")
         existing.forward_scheme = parsed["forward_scheme"]
         existing.forward_host = parsed["forward_host"]
         existing.forward_port = parsed["forward_port"]
@@ -2342,6 +2766,10 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
     else:
         new_host = ProxyHost(
             domain_names=parsed["domain_names"],
+            host_type=parsed.get("host_type", "proxy"),
+            root_path=parsed.get("root_path"),
+            php_version=parsed.get("php_version", "auto"),
+            php_fpm_socket=parsed.get("php_fpm_socket"),
             forward_scheme=parsed["forward_scheme"],
             forward_host=parsed["forward_host"],
             forward_port=parsed["forward_port"],
@@ -2364,7 +2792,7 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
     client_ip = req.client.host if req.client else "127.0.0.1"
     audit = AuditLog(
         action="NGINX_IMPORT_SINGLE",
-        details=f"Imported Nginx site '{target_host.domain_names}' -> {target_host.forward_scheme}://{target_host.forward_host}:{target_host.forward_port} ({action_msg})",
+        details=f"Imported Nginx site '{target_host.domain_names}' -> {target_host.host_type.upper()} ({action_msg})",
         status="success",
         client_ip=client_ip
     )
@@ -2375,7 +2803,8 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
         "message": f"Successfully {action_msg} proxy host for domain(s): {target_host.domain_names}",
         "host_id": target_host.id,
         "domain_names": target_host.domain_names,
-        "forward_target": f"{target_host.forward_scheme}://{target_host.forward_host}:{target_host.forward_port}"
+        "host_type": target_host.host_type,
+        "forward_target": f"{target_host.forward_scheme}://{target_host.forward_host}:{target_host.forward_port}" if target_host.host_type == "proxy" else (target_host.root_path or "LEMP")
     }
 
 @app.post("/api/nginx/import/all")
@@ -2388,7 +2817,7 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
 
     # Split by 'server {'
     parts = re.split(r'\bserver\s*\{', raw_conf, flags=re.IGNORECASE)
-    server_blocks = [p for p in parts if "proxy_pass" in p or "server_name" in p]
+    server_blocks = [p for p in parts if "proxy_pass" in p or "server_name" in p or "fastcgi_pass" in p]
 
     if not server_blocks:
         # Fallback to single block parsing
@@ -2403,6 +2832,10 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
 
         existing = db.query(ProxyHost).filter(ProxyHost.domain_names.like(f"%{primary_domain}%")).first()
         if existing and payload.overwrite:
+            existing.host_type = parsed.get("host_type", "proxy")
+            existing.root_path = parsed.get("root_path")
+            existing.php_version = parsed.get("php_version", "auto")
+            existing.php_fpm_socket = parsed.get("php_fpm_socket")
             existing.forward_scheme = parsed["forward_scheme"]
             existing.forward_host = parsed["forward_host"]
             existing.forward_port = parsed["forward_port"]
@@ -2414,6 +2847,10 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
         else:
             new_h = ProxyHost(
                 domain_names=parsed["domain_names"],
+                host_type=parsed.get("host_type", "proxy"),
+                root_path=parsed.get("root_path"),
+                php_version=parsed.get("php_version", "auto"),
+                php_fpm_socket=parsed.get("php_fpm_socket"),
                 forward_scheme=parsed["forward_scheme"],
                 forward_host=parsed["forward_host"],
                 forward_port=parsed["forward_port"],
@@ -2549,6 +2986,14 @@ def scan_host_nginx_configs() -> list:
                         domain_map[primary_domain]["ssl_forced"] = True
                     continue
 
+                fastcgi_match = re.search(r'fastcgi_pass\s+([^;]+);', block, re.IGNORECASE)
+                root_match = re.search(r'root\s+([^;]+);', block, re.IGNORECASE)
+
+                host_type = "proxy"
+                root_path = root_match.group(1).strip() if root_match else None
+                php_version = "auto"
+                php_fpm_socket = None
+
                 forward_scheme = "http"
                 forward_host = "127.0.0.1"
                 forward_port = 80
@@ -2556,8 +3001,16 @@ def scan_host_nginx_configs() -> list:
                     forward_scheme = proxy_pass_match.group(1).replace("://", "")
                     forward_host = proxy_pass_match.group(2)
                     forward_port = int(proxy_pass_match.group(3)) if proxy_pass_match.group(3) else (443 if forward_scheme == "https" else 80)
+                elif fastcgi_match:
+                    host_type = "lemp"
+                    php_fpm_socket = fastcgi_match.group(1).strip()
+                    m_ver = re.search(r'php(\d+\.\d+)', php_fpm_socket)
+                    if m_ver:
+                        php_version = m_ver.group(1)
+                elif root_match:
+                    host_type = "static"
                 else:
-                    # Skip blocks with no proxy_pass to avoid duplicate loopback entries
+                    # Skip blocks with no proxy_pass, no fastcgi, and no root to avoid duplicate loopback entries
                     continue
 
                 websocket_support = bool(re.search(r'Upgrade|http_upgrade', block, re.IGNORECASE))
@@ -2570,6 +3023,10 @@ def scan_host_nginx_configs() -> list:
                 host_entry = {
                     "file_path": fpath,
                     "domain_names": ", ".join(doms),
+                    "host_type": host_type,
+                    "root_path": root_path,
+                    "php_version": php_version,
+                    "php_fpm_socket": php_fpm_socket,
                     "forward_scheme": forward_scheme,
                     "forward_host": forward_host,
                     "forward_port": forward_port,
@@ -2622,6 +3079,10 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
 
         if existing:
             existing.domain_names = item["domain_names"]
+            existing.host_type = item.get("host_type", "proxy")
+            existing.root_path = item.get("root_path")
+            existing.php_version = item.get("php_version", "auto")
+            existing.php_fpm_socket = item.get("php_fpm_socket")
             existing.forward_scheme = item["forward_scheme"]
             existing.forward_host = item["forward_host"]
             existing.forward_port = item["forward_port"]
@@ -2635,6 +3096,10 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
             new_host = ProxyHost(
                 domain_names=item["domain_names"],
                 app_name="Host Nginx VirtualHost",
+                host_type=item.get("host_type", "proxy"),
+                root_path=item.get("root_path"),
+                php_version=item.get("php_version", "auto"),
+                php_fpm_socket=item.get("php_fpm_socket"),
                 forward_scheme=item["forward_scheme"],
                 forward_host=item["forward_host"],
                 forward_port=item["forward_port"],
@@ -2768,10 +3233,11 @@ def api_sync_host_ufw(req: Request, db: Session = Depends(get_db)):
 
 @app.on_event("startup")
 def on_app_startup():
-    """Auto-syncs live host Nginx and UFW configuration on Linux server startup without deleting any existing data."""
+    """Auto-seeds default super_admin account and syncs live host Nginx & UFW configuration on server startup."""
     try:
         db = SessionLocal()
         try:
+            ensure_default_admin(db)
             if platform.system() == "Linux" and os.path.isdir("/etc/nginx"):
                 sync_host_nginx_into_db(db, force_replace_demo=False)
                 sync_host_ufw_into_db(db)
@@ -2779,6 +3245,31 @@ def on_app_startup():
             db.close()
     except Exception as e:
         print(f"Notice: Server startup auto-sync: {e}")
+
+@app.get("/api/php-runtimes")
+def get_php_runtimes():
+    """Returns detected PHP versions and sockets on the host system."""
+    return detect_host_php_runtimes()
+
+@app.post("/api/nginx/reload")
+def reload_system_nginx(req: Request):
+    """Tests syntax with nginx -t and reloads Nginx daemon."""
+    verify_super_admin(req)
+    if platform.system() != "Linux":
+        return {"status": "skipped", "message": "Host system is not Linux. Nginx reload simulated successfully."}
+    
+    t_res = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=8)
+    if t_res.returncode != 0:
+        raise HTTPException(status_code=400, detail=f"Nginx syntax error: {t_res.stderr or t_res.stdout}")
+    
+    r_res = subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, text=True, timeout=8)
+    if r_res.returncode != 0:
+        r_res = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True, timeout=8)
+    
+    if r_res.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Failed to reload Nginx: {r_res.stderr or r_res.stdout}")
+    
+    return {"status": "success", "message": "Nginx configuration verified and service reloaded successfully."}
 
 @app.post("/api/validate-nginx")
 def validate_nginx_config(payload: NginxValidationRequest):
@@ -3328,6 +3819,279 @@ def report_domain_abuse(data: AbuseReportCreate, req: Request, db: Session = Dep
 
     return {"message": "Abuse incident recorded & IP drop rule enforced in UFW"}
 
+# ---------------------------------------------------------
+# Host System Intelligence & Real Certificate / Domain Discovery
+# ---------------------------------------------------------
+WHOIS_EXPIRY_CACHE: Dict[str, dict] = {}
+
+def get_real_nameservers(domain: str) -> List[str]:
+    """Queries live DNS for authoritative nameservers."""
+    clean = domain.strip().lower()
+    ns_list = []
+    try:
+        p = subprocess.run(["dig", "+short", "NS", clean], capture_output=True, text=True, timeout=3)
+        if p.returncode == 0 and p.stdout:
+            for line in p.stdout.splitlines():
+                val = line.strip().rstrip(".").lower()
+                if val and val not in ns_list:
+                    ns_list.append(val)
+    except Exception:
+        pass
+
+    if not ns_list:
+        try:
+            p = subprocess.run(["host", "-t", "NS", clean], capture_output=True, text=True, timeout=3)
+            if p.returncode == 0 and p.stdout:
+                for line in p.stdout.splitlines():
+                    m = re.search(r'name server\s+([^\s]+)', line, re.IGNORECASE)
+                    if m:
+                        val = m.group(1).rstrip(".").lower()
+                        if val and val not in ns_list:
+                            ns_list.append(val)
+        except Exception:
+            pass
+    return ns_list
+
+def query_whois_socket(server: str, query: str, timeout: int = 5) -> str:
+    """Performs raw WHOIS query over TCP port 43."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((server, 43))
+        s.send((query + "\r\n").encode("utf-8"))
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        s.close()
+        return buf.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+def parse_whois_date_str(val: str) -> Optional[datetime.date]:
+    """Parses arbitrary WHOIS date formats into datetime.date."""
+    if not val:
+        return None
+    val = val.strip()
+    m_iso = re.search(r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})', val)
+    if m_iso:
+        try:
+            return datetime.date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+        except Exception:
+            pass
+    m_dm = re.search(r'(\d{1,2})[-/.]([A-Za-z]{3}|\d{1,2})[-/.](\d{4})', val)
+    if m_dm:
+        day_s = m_dm.group(1)
+        mon_s = m_dm.group(2)
+        yr_s = m_dm.group(3)
+        for fmt in ["%d-%b-%Y", "%d-%m-%Y"]:
+            try:
+                dt = datetime.datetime.strptime(f"{day_s}-{mon_s}-{yr_s}", fmt)
+                return dt.date()
+            except Exception:
+                pass
+    return None
+
+def query_full_whois(domain: str) -> dict:
+    """Authoritative WHOIS and DNS intelligence query following referral registries."""
+    clean = domain.lower().strip()
+    clean = re.sub(r'^https?://', '', clean).split('/')[0].split(':')[0]
+    if not clean:
+        return {}
+
+    now = datetime.datetime.utcnow()
+    cached = WHOIS_EXPIRY_CACHE.get(clean)
+    if cached and (now - cached.get("_cached_at", now)).total_seconds() < 86400:
+        return cached
+
+    resolved_ip = "Unresolved / Offline"
+    try:
+        resolved_ip = socket.gethostbyname(clean)
+    except Exception:
+        resolved_ip = "DNS resolution failed"
+
+    live_ns = get_real_nameservers(clean)
+
+    raw_text = ""
+    target_server = None
+    if clean.endswith(".ug"):
+        target_server = "whois.co.ug"
+    elif clean.endswith(".com") or clean.endswith(".net"):
+        target_server = "whois.verisign-grs.com"
+    elif clean.endswith(".org"):
+        target_server = "whois.publicinterestregistry.org"
+    elif clean.endswith(".io"):
+        target_server = "whois.nic.io"
+
+    if target_server:
+        raw_text = query_whois_socket(target_server, clean)
+
+    if not raw_text or len(raw_text.strip()) < 30:
+        try:
+            p = subprocess.run(["whois", clean], capture_output=True, text=True, timeout=6)
+            raw_text = p.stdout or p.stderr or ""
+        except Exception:
+            pass
+
+    if not raw_text or len(raw_text.strip()) < 30:
+        tld = clean.split(".")[-1]
+        iana_res = query_whois_socket("whois.iana.org", tld)
+        ref_m = re.search(r'(?:refer|whois):\s*([^\s]+)', iana_res, re.IGNORECASE)
+        if ref_m:
+            ref_server = ref_m.group(1).strip()
+            raw_text = query_whois_socket(ref_server, clean)
+        else:
+            raw_text = iana_res
+
+    registrar = "Unknown / Registry"
+    reg_m = re.search(r'(?:Registrar|registrar|Sponsoring Registrar|Registrar Name):\s*(.+)', raw_text, re.IGNORECASE)
+    if reg_m:
+        registrar = reg_m.group(1).strip()
+
+    created_on = "Unknown"
+    cr_m = re.search(r'(?:Creation Date|Created|Registration Date|Registered On|created|registered):\s*(.+)', raw_text, re.IGNORECASE)
+    if cr_m:
+        created_on = cr_m.group(1).strip()
+
+    expires_on = "Unknown"
+    exp_m = re.search(r'(?:Registry Expiry Date|Expiration Date|Expires On|Expires|expires|paid-till):\s*(.+)', raw_text, re.IGNORECASE)
+    if exp_m:
+        expires_on = exp_m.group(1).strip()
+
+    parsed_exp_date = parse_whois_date_str(expires_on)
+    parsed_reg_date = parse_whois_date_str(created_on)
+
+    whois_ns = []
+    for m in re.finditer(r'(?:Name Server|Nameserver|nserver):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
+        ns_cand = m.group(1).strip().lower().rstrip('.')
+        if ns_cand and ("." in ns_cand) and ns_cand not in whois_ns:
+            whois_ns.append(ns_cand)
+
+    final_ns = live_ns if live_ns else whois_ns
+
+    status_list = []
+    for m in re.finditer(r'(?:Domain Status|Status):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
+        st = m.group(1).strip()
+        if st and st not in status_list:
+            status_list.append(st)
+
+    abuse_contact = "Unknown"
+    ab_m = re.search(r'(?:Registrar Abuse Contact Email|abuse-mailbox|e-mail):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE)
+    if ab_m:
+        abuse_contact = ab_m.group(1).strip()
+
+    res = {
+        "domain": clean,
+        "ip_resolution": resolved_ip,
+        "registrar": registrar,
+        "registered_on": created_on,
+        "expires_on": expires_on,
+        "parsed_expires_date": parsed_exp_date,
+        "parsed_registered_date": parsed_reg_date,
+        "nameservers": final_ns[:6] if final_ns else ["None listed in DNS / WHOIS"],
+        "status": ", ".join(status_list[:3]) if status_list else "Active / Registered",
+        "abuse_contact": abuse_contact,
+        "raw_record": raw_text,
+        "_cached_at": now
+    }
+    WHOIS_EXPIRY_CACHE[clean] = res
+    return res
+
+def inspect_host_ssl_certificate(domain: str) -> Optional[dict]:
+    """Inspects real SSL certificate on the host filesystem or via live TLS handshake."""
+    clean = domain.lower().strip()
+    clean = re.sub(r'^https?://', '', clean).split('/')[0].split(':')[0]
+    if not clean:
+        return None
+
+    candidate_paths = [
+        f"/etc/letsencrypt/live/{clean}/fullchain.pem",
+        f"/etc/letsencrypt/live/{clean}/cert.pem",
+        f"/etc/ssl/certs/{clean}.crt",
+        f"/etc/nginx/ssl/{clean}.crt"
+    ]
+    parts = clean.split(".")
+    if len(parts) > 2:
+        apex = ".".join(parts[-2:])
+        candidate_paths.append(f"/etc/letsencrypt/live/{apex}/fullchain.pem")
+
+    found_cert_file = None
+    for p in candidate_paths:
+        if os.path.isfile(p):
+            found_cert_file = p
+            break
+
+    if found_cert_file:
+        try:
+            p = subprocess.run(["openssl", "x509", "-enddate", "-startdate", "-issuer", "-noout", "-in", found_cert_file], capture_output=True, text=True, timeout=3)
+            if p.returncode == 0 and "notAfter=" in p.stdout:
+                out = p.stdout
+                exp_date = None
+                iss_date = None
+                exp_m = re.search(r'notAfter=(.+)', out)
+                if exp_m:
+                    date_str = exp_m.group(1).strip()
+                    try:
+                        exp_date = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
+                    except Exception:
+                        pass
+                iss_m = re.search(r'notBefore=(.+)', out)
+                if iss_m:
+                    date_str = iss_m.group(1).strip()
+                    try:
+                        iss_date = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
+                    except Exception:
+                        pass
+                issuer = "Let's Encrypt" if "Let's Encrypt" in out else "Host SSL Certificate"
+                return {
+                    "expires_at": exp_date,
+                    "issued_at": iss_date,
+                    "provider": issuer,
+                    "cert_path": found_cert_file,
+                    "status": "valid" if (exp_date and exp_date >= datetime.date.today()) else "expired"
+                }
+        except Exception:
+            pass
+
+    # Live TLS probe via openssl s_client
+    target_ip = "127.0.0.1"
+    try:
+        cmd = f"echo | openssl s_client -servername {clean} -connect {target_ip}:443 2>/dev/null | openssl x509 -noout -enddate -startdate -issuer 2>/dev/null"
+        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=4)
+        if p.returncode == 0 and "notAfter=" in p.stdout:
+            out = p.stdout
+            exp_date = None
+            iss_date = None
+            exp_m = re.search(r'notAfter=(.+)', out)
+            if exp_m:
+                date_str = exp_m.group(1).strip()
+                try:
+                    exp_date = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
+                except Exception:
+                    pass
+            iss_m = re.search(r'notBefore=(.+)', out)
+            if iss_m:
+                date_str = iss_m.group(1).strip()
+                try:
+                    iss_date = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
+                except Exception:
+                    pass
+            issuer = "Let's Encrypt" if "Let's Encrypt" in out else "TLS Server Certificate"
+            if exp_date:
+                return {
+                    "expires_at": exp_date,
+                    "issued_at": iss_date,
+                    "provider": issuer,
+                    "cert_path": f"Live TLS Port 443 (SNI: {clean})",
+                    "status": "valid" if exp_date >= datetime.date.today() else "expired"
+                }
+    except Exception:
+        pass
+
+    return None
+
 @app.get("/api/whois/{domain}")
 def lookup_whois(domain: str):
     """Performs live WHOIS domain intelligence query with real DNS resolution."""
@@ -3336,82 +4100,17 @@ def lookup_whois(domain: str):
     if not clean_domain:
         raise HTTPException(status_code=400, detail="Invalid domain name provided.")
 
-    # 1. Real IP resolution
-    resolved_ip = "Unresolved / Offline"
-    try:
-        resolved_ip = socket.gethostbyname(clean_domain)
-    except Exception:
-        resolved_ip = "DNS resolution failed"
-
-    # 2. Query WHOIS via CLI or fallback to port 43 socket
-    raw_text = ""
-    try:
-        proc = subprocess.run(["whois", clean_domain], capture_output=True, text=True, timeout=6)
-        raw_text = proc.stdout or proc.stderr or ""
-    except Exception:
-        pass
-
-    if not raw_text or "No whois server" in raw_text or len(raw_text.strip()) < 15:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
-            s.connect(("whois.iana.org", 43))
-            s.send((clean_domain + "\r\n").encode())
-            res_buf = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                res_buf += chunk
-            s.close()
-            raw_text = res_buf.decode("utf-8", errors="ignore")
-        except Exception as e:
-            if not raw_text:
-                raw_text = f"WHOIS service notice: {str(e)}"
-
-    # 3. Parse key attributes
-    registrar = "Unknown / Registry"
-    reg_match = re.search(r'(?:Registrar|registrar|Sponsoring Registrar):\s*(.+)', raw_text)
-    if reg_match:
-        registrar = reg_match.group(1).strip()
-
-    created_on = "Unknown"
-    cr_match = re.search(r'(?:Creation Date|Created|Registration Date|created|registered):\s*(.+)', raw_text, re.IGNORECASE)
-    if cr_match:
-        created_on = cr_match.group(1).strip()
-
-    expires_on = "Unknown"
-    exp_match = re.search(r'(?:Registry Expiry Date|Expiration Date|Expires|expires|paid-till):\s*(.+)', raw_text, re.IGNORECASE)
-    if exp_match:
-        expires_on = exp_match.group(1).strip()
-
-    nameservers = []
-    for m in re.finditer(r'(?:Name Server|nserver|nameserver):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
-        ns = m.group(1).strip().lower().rstrip('.')
-        if ns and ns not in nameservers:
-            nameservers.append(ns)
-
-    status_list = []
-    for m in re.finditer(r'(?:Domain Status|status):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE):
-        st = m.group(1).strip()
-        if st and st not in status_list:
-            status_list.append(st)
-
-    abuse_contact = "Unknown"
-    ab_match = re.search(r'(?:Registrar Abuse Contact Email|abuse-mailbox|e-mail):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE)
-    if ab_match:
-        abuse_contact = ab_match.group(1).strip()
-
+    data = query_full_whois(clean_domain)
     return {
-        "domain": clean_domain,
-        "ip_resolution": resolved_ip,
-        "registrar": registrar,
-        "registered_on": created_on,
-        "expires_on": expires_on,
-        "nameservers": nameservers[:6] if nameservers else ["None listed in WHOIS record"],
-        "status": ", ".join(status_list[:3]) if status_list else "Active / Registered",
-        "abuse_contact": abuse_contact,
-        "raw_record": raw_text
+        "domain": data.get("domain", clean_domain),
+        "ip_resolution": data.get("ip_resolution", "DNS resolution failed"),
+        "registrar": data.get("registrar", "Unknown / Registry"),
+        "registered_on": data.get("registered_on", "Unknown"),
+        "expires_on": data.get("expires_on", "Unknown"),
+        "nameservers": data.get("nameservers", ["None listed"]),
+        "status": data.get("status", "Active / Registered"),
+        "abuse_contact": data.get("abuse_contact", "Unknown"),
+        "raw_record": data.get("raw_record", "")
     }
 
 # ---------------------------------------------------------
@@ -3587,51 +4286,56 @@ def render_suspended_landing_page(
 # ---------------------------------------------------------
 @app.get("/api/certificates")
 def get_certificates(db: Session = Depends(get_db)):
-    """Provides complete domain and SSL certificate expiration timelines for billing and renewals."""
+    """Provides complete domain and SSL certificate expiration timelines directly from host and WHOIS."""
     try:
         existing_certs = {c.domain.lower(): c for c in db.query(Certificate).all()}
         hosts = db.query(ProxyHost).all()
         today = datetime.date.today()
 
-        # Ensure every ProxyHost domain has a tracked Certificate record
         for h in hosts:
             doms = [d.strip().lower() for d in h.domain_names.replace(",", " ").split() if d.strip()]
             for d in doms:
-                cert_file = f"/etc/letsencrypt/live/{d}/fullchain.pem"
-                real_exp = None
-                if os.path.isfile(cert_file):
-                    try:
-                        res = subprocess.run(["openssl", "x509", "-enddate", "-noout", "-in", cert_file], capture_output=True, text=True, timeout=3)
-                        if res.returncode == 0 and "notAfter=" in res.stdout:
-                            date_str = res.stdout.split("notAfter=")[1].strip()
-                            real_exp = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").date()
-                    except Exception:
-                        pass
+                # 1. Query real host SSL certificate
+                ssl_info = inspect_host_ssl_certificate(d)
+                real_ssl_exp = ssl_info.get("expires_at") if ssl_info else h.ssl_expires_at
+                real_ssl_iss = ssl_info.get("issued_at") if ssl_info else None
+                real_provider = (ssl_info.get("provider") if ssl_info else None) or h.ssl_provider or ("Let's Encrypt Certbot" if h.ssl_forced else "Unconfigured")
+                cert_path_val = (ssl_info.get("cert_path") if ssl_info else None) or f"/etc/letsencrypt/live/{d}"
 
-                ssl_exp = real_exp or h.ssl_expires_at or (today + datetime.timedelta(days=90))
-                dom_exp = today + datetime.timedelta(days=365)
+                if ssl_info and ssl_info.get("expires_at") and h.ssl_expires_at != ssl_info["expires_at"]:
+                    h.ssl_expires_at = ssl_info["expires_at"]
+                    h.ssl_status = ssl_info.get("status", "valid")
+
+                # 2. Query real registry domain expiration via WHOIS
+                whois_data = query_full_whois(d)
+                real_dom_exp = whois_data.get("parsed_expires_date")
+                real_dom_reg = whois_data.get("parsed_registered_date")
 
                 if d in existing_certs:
                     c = existing_certs[d]
-                    if not c.expires_at or c.expires_at < today:
-                        c.expires_at = ssl_exp
-                    if not c.domain_expires_at:
-                        c.domain_expires_at = dom_exp
-                    if not c.provider or c.provider == "Let's Encrypt":
-                        c.provider = h.ssl_provider or "Let's Encrypt Certbot"
+                    if real_ssl_exp:
+                        c.expires_at = real_ssl_exp
+                    if real_ssl_iss:
+                        c.issued_at = real_ssl_iss
+                    if real_dom_exp:
+                        c.domain_expires_at = real_dom_exp
+                    if real_dom_reg:
+                        c.domain_registered_at = real_dom_reg
+                    c.provider = real_provider
                     c.auto_renew = bool(h.ssl_forced)
-                    c.status = "valid" if (c.expires_at and c.expires_at >= today) else "expiring_soon"
+                    c.cert_path = cert_path_val
+                    c.status = "valid" if (c.expires_at and c.expires_at >= today) else ("expiring_soon" if c.expires_at else "disabled")
                 else:
                     new_c = Certificate(
                         domain=d,
-                        provider=h.ssl_provider or "Let's Encrypt Certbot",
-                        status="valid" if h.ssl_forced else "disabled",
-                        issued_at=today - datetime.timedelta(days=15),
-                        expires_at=ssl_exp,
-                        domain_registered_at=today - datetime.timedelta(days=180),
-                        domain_expires_at=dom_exp,
+                        provider=real_provider,
+                        status="valid" if (real_ssl_exp and real_ssl_exp >= today) else ("disabled" if not h.ssl_forced else "expiring_soon"),
+                        issued_at=real_ssl_iss,
+                        expires_at=real_ssl_exp,
+                        domain_registered_at=real_dom_reg,
+                        domain_expires_at=real_dom_exp,
                         auto_renew=bool(h.ssl_forced),
-                        cert_path=f"/etc/letsencrypt/live/{d}"
+                        cert_path=cert_path_val
                     )
                     db.add(new_c)
                     existing_certs[d] = new_c
@@ -3643,12 +4347,12 @@ def get_certificates(db: Session = Depends(get_db)):
             {
                 "id": c.id,
                 "domain": c.domain,
-                "provider": c.provider or "Let's Encrypt Certbot",
-                "status": c.status or "valid",
-                "issued_at": str(c.issued_at) if c.issued_at else str(today),
-                "expires_at": str(c.expires_at) if c.expires_at else str(today + datetime.timedelta(days=90)),
+                "provider": c.provider or "Unconfigured",
+                "status": c.status or ("valid" if c.expires_at and c.expires_at >= today else "disabled"),
+                "issued_at": str(c.issued_at) if c.issued_at else "",
+                "expires_at": str(c.expires_at) if c.expires_at else "",
                 "domain_registered_at": str(c.domain_registered_at) if c.domain_registered_at else "",
-                "domain_expires_at": str(c.domain_expires_at) if c.domain_expires_at else str(today + datetime.timedelta(days=365)),
+                "domain_expires_at": str(c.domain_expires_at) if c.domain_expires_at else "",
                 "auto_renew": bool(c.auto_renew),
                 "cert_path": c.cert_path or f"/etc/letsencrypt/live/{c.domain}"
             }
@@ -3799,7 +4503,7 @@ def detect_traffic_anomalies(logs):
     return annotated
 
 def ensure_traffic_logs_seeded(db: Session):
-    """Initializes realistic baseline web traffic & error log activity across reverse proxy hosts."""
+    """Initializes realistic baseline web traffic & error log activity using host proxy domains."""
     count = db.query(WebTrafficLog).count()
     if count >= 30:
         return
@@ -3812,56 +4516,83 @@ def ensure_traffic_logs_seeded(db: Session):
             if clean and clean not in domain_list:
                 domain_list.append(clean)
     if not domain_list:
-        domain_list = ["ncloud.co.ug", "sun.ac.ug", "portal.sun.ac.ug", "api.novacloudedges.com"]
+        domain_list = ["localhost"]
 
-    sample_nodes = [
-        {"ip": "127.0.0.1", "label": "Localhost Console", "ua": "Nova-Edge-Monitor/2.1"},
-        {"ip": "197.239.12.8", "label": "Kampala Fiber Node", "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0"},
-        {"ip": "102.214.34.19", "label": "Entebbe Edge Gateway", "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1"},
-        {"ip": "41.210.144.75", "label": "Jinja Upstream Relay", "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X)"},
-        {"ip": "154.72.198.62", "label": "Nairobi Peering Transit", "ua": "Mozilla/5.0 (X11; Linux x86_64) Firefox/125.0"},
-        {"ip": "165.22.18.91", "label": "Cloudflare CDN Proxy", "ua": "Cloudflare-AlwaysOnline/1.0"}
-    ]
+    # Check if host has real Nginx access log
+    real_nginx_log = "/var/log/nginx/access.log"
+    if os.path.isfile(real_nginx_log):
+        try:
+            parsed_logs = []
+            log_regex = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(\S+)\s+(\S+)\s+[^"]*"\s+(\d{3})\s+(\d+)\s+"[^"]*"\s+"([^"]*)"')
+            with open(real_nginx_log, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [l.strip() for l in f if l.strip()][-80:]
+            for line in lines:
+                m = log_regex.match(line)
+                if m:
+                    cip = m.group(1)
+                    method = m.group(3)
+                    path = m.group(4)
+                    status = int(m.group(5))
+                    b_sent = int(m.group(6))
+                    ua = m.group(7)
+                    dom = domain_list[0]
+                    is_err = status >= 400
+                    sev = "critical" if status >= 500 else ("warning" if status >= 400 else "none")
+                    parsed_logs.append(WebTrafficLog(
+                        timestamp=datetime.datetime.utcnow(),
+                        client_ip=cip,
+                        method=method,
+                        domain=dom,
+                        path=path,
+                        status_code=status,
+                        response_time_ms=15,
+                        bytes_sent=b_sent,
+                        user_agent=ua,
+                        error_message=f"HTTP {status}" if is_err else None,
+                        is_error=is_err,
+                        error_severity=sev
+                    ))
+            if parsed_logs:
+                db.bulk_save_objects(parsed_logs)
+                db.commit()
+                return
+        except Exception as e:
+            print(f"Notice: Parsing {real_nginx_log}: {e}")
 
     traffic_samples = [
         ("GET", "/", 200, 18, 4120, None, False, "none"),
         ("GET", "/assets/app.js", 200, 12, 18450, None, False, "none"),
-        ("GET", "/api/v1/telemetry", 200, 24, 1280, None, False, "none"),
-        ("POST", "/api/auth/login", 200, 48, 850, None, False, "none"),
-        ("GET", "/student/portal", 200, 32, 9400, None, False, "none"),
         ("GET", "/api/v1/health", 200, 8, 220, None, False, "none"),
-        ("GET", "/wp-login.php", 403, 14, 340, "403 Forbidden: WAF rule blocked administrative exploit probing", True, "warning"),
-        ("GET", "/.env", 404, 10, 180, "404 Not Found: Security rule suppressed configuration file access", True, "warning"),
-        ("POST", "/api/v1/payments", 200, 65, 1420, None, False, "none"),
-        ("GET", "/api/v1/sync", 502, 110, 520, "502 Bad Gateway: Upstream connection refused at 127.0.0.1:8080", True, "critical"),
+        ("POST", "/api/auth/login", 200, 48, 850, None, False, "none"),
+        ("GET", "/wp-login.php", 403, 14, 340, "403 Forbidden: WAF blocked probing", True, "warning"),
+        ("GET", "/.env", 404, 10, 180, "404 Not Found: Security rule blocked sensitive file access", True, "warning"),
+        ("GET", "/api/v1/sync", 502, 110, 520, "502 Bad Gateway: Upstream connection refused", True, "critical"),
         ("GET", "/docs/api", 200, 22, 6200, None, False, "none"),
-        ("GET", "/non-existent-page", 404, 12, 280, "404 Not Found: Requested resource was not found on this server", True, "warning"),
-        ("POST", "/api/upload", 413, 28, 410, "413 Payload Too Large: Client request body exceeded max limit (25MB)", True, "warning"),
-        ("GET", "/upstream/timeout", 504, 5000, 480, "504 Gateway Timeout: Upstream backend server timed out after 5.0s", True, "critical")
+        ("GET", "/non-existent-page", 404, 12, 280, "404 Not Found: Requested resource was not found", True, "warning"),
+        ("POST", "/api/upload", 413, 28, 410, "413 Payload Too Large: Client request body exceeded limit", True, "warning"),
+        ("GET", "/upstream/timeout", 504, 5000, 480, "504 Gateway Timeout: Upstream backend server timed out", True, "critical")
     ]
 
+    client_ips = ["127.0.0.1", "192.168.1.10", "10.0.0.5", "172.16.0.1"]
     import random
     now = datetime.datetime.utcnow()
     new_logs = []
-    for i in range(85):
-        t_delta = datetime.timedelta(minutes=random.randint(2, 380), seconds=random.randint(0, 59))
-        node = random.choice(sample_nodes)
+    for i in range(50):
+        t_delta = datetime.timedelta(minutes=random.randint(2, 240), seconds=random.randint(0, 59))
         dom = random.choice(domain_list)
+        cip = random.choice(client_ips)
         method, path, status, resp_time, bytes_s, err_msg, is_err, severity = random.choice(traffic_samples)
-
-        if random.random() < 0.28:
-            node = sample_nodes[0]
 
         new_logs.append(WebTrafficLog(
             timestamp=now - t_delta,
-            client_ip=node["ip"],
+            client_ip=cip,
             method=method,
             domain=dom,
             path=path,
             status_code=status,
             response_time_ms=resp_time + random.randint(0, 15),
             bytes_sent=bytes_s + random.randint(-50, 150),
-            user_agent=node["ua"],
+            user_agent="Mozilla/5.0 (Nova Edge Proxy Gateway)",
             error_message=err_msg,
             is_error=is_err,
             error_severity=severity

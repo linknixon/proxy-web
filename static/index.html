@@ -432,9 +432,14 @@
             </button>
 
 
+            <button class="btn-secondary" id="btn-quick-reload-nginx" title="Test Nginx configuration with nginx -t and safely reload daemon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              Reload Nginx
+            </button>
+
             <button class="btn-primary" id="btn-open-create-modal">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
-              Add Proxy Host
+              New Virtual Host
             </button>
           </div>
         </div>
@@ -443,7 +448,7 @@
           <div class="panel-header">
             <div class="panel-title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-              <span>Reverse Proxy Hosts</span>
+              <span>Nginx Virtual Hosts (Reverse Proxy & LEMP Stack)</span>
             </div>
             <button class="btn-secondary btn-sm" id="btn-refresh-hosts">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -456,10 +461,10 @@
               <thead>
                 <tr>
                   <th>Domain Names</th>
-                  <th>Forward Target</th>
-                  <th>Features</th>
+                  <th>Target / Document Root</th>
+                  <th>Stack / Features</th>
                   <th>SSL Certificate</th>
-                  <th>Suspension Status</th>
+                  <th>Status</th>
                   <th style="text-align: right;">Actions</th>
                 </tr>
               </thead>
@@ -1160,11 +1165,11 @@
     </footer>
   </div>
 
-  <!-- MODAL: ADD / EDIT PROXY HOST -->
+  <!-- MODAL: ADD / EDIT PROXY & LEMP VIRTUAL HOST -->
   <div class="modal-overlay" id="host-modal">
-    <div class="modal-card">
+    <div class="modal-card" style="max-width: 680px;">
       <div class="modal-header">
-        <h3 class="panel-title" id="host-modal-title">New Proxy Host</h3>
+        <h3 class="panel-title" id="host-modal-title">New Virtual Host</h3>
         <button class="btn-icon" id="btn-close-host-modal" title="Close">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -1174,58 +1179,137 @@
         <div class="modal-body">
           <div class="form-group" style="margin-bottom: 1rem;">
             <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Domain Names *</label>
-            <input type="text" class="form-input" id="input-domain-names" placeholder="ncloud.co.ug" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
-            <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.2rem;">Accepts primary apex domains (e.g. domain.com) and subdomains. Separate multiple aliases with commas.</small>
+            <input type="text" class="form-input" id="input-domain-names" placeholder="ncloud.co.ug, www.ncloud.co.ug" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+            <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.2rem;">Accepts apex domains and subdomains. Separate multiple aliases with commas.</small>
           </div>
 
           <div class="form-group" style="margin-bottom: 1rem;">
-            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Application Name / Service Label</label>
-            <input type="text" class="form-input" id="input-app-name" placeholder="e.g. University Portal, ERP Backend, Nova API" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
-            <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.2rem;">Specify the application name or service running behind this proxy host.</small>
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Application Label / Service Name</label>
+            <input type="text" class="form-input" id="input-app-name" placeholder="e.g. University Portal, WordPress Blog, CloudPanel Service" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
           </div>
 
-          <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 0.65rem; margin-bottom: 1rem;">
-            <div>
-              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Scheme</label>
-              <select id="input-forward-scheme" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
-                <option value="http">http</option>
-                <option value="https">https</option>
-              </select>
+          <!-- Architecture Stack Selector -->
+          <div class="form-group" style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Architecture Stack *</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.55rem;">
+              <label id="opt-stack-proxy" style="display: flex; flex-direction: column; padding: 0.65rem 0.75rem; border-radius: 8px; border: 2px solid var(--secondary); background: var(--bg-main); cursor: pointer; transition: all 0.2s ease;">
+                <div style="display: flex; align-items: center; gap: 0.45rem;">
+                  <input type="radio" name="host_stack_type" value="proxy" id="radio-stack-proxy" checked style="accent-color: var(--secondary);">
+                  <span style="font-weight: 700; font-size: 0.84rem; color: var(--text-main);">Reverse Proxy</span>
+                </div>
+                <small style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">CloudPanel, Node, Python, Docker</small>
+              </label>
+
+              <label id="opt-stack-lemp" style="display: flex; flex-direction: column; padding: 0.65rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); cursor: pointer; transition: all 0.2s ease;">
+                <div style="display: flex; align-items: center; gap: 0.45rem;">
+                  <input type="radio" name="host_stack_type" value="lemp" id="radio-stack-lemp" style="accent-color: var(--secondary);">
+                  <span style="font-weight: 700; font-size: 0.84rem; color: var(--text-main);">LEMP Stack</span>
+                </div>
+                <small style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">PHP-FPM, WordPress, Laravel</small>
+              </label>
+
+              <label id="opt-stack-static" style="display: flex; flex-direction: column; padding: 0.65rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); cursor: pointer; transition: all 0.2s ease;">
+                <div style="display: flex; align-items: center; gap: 0.45rem;">
+                  <input type="radio" name="host_stack_type" value="static" id="radio-stack-static" style="accent-color: var(--secondary);">
+                  <span style="font-weight: 700; font-size: 0.84rem; color: var(--text-main);">Static Site</span>
+                </div>
+                <small style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">HTML5, React, Vue, Vite SPA</small>
+              </label>
             </div>
-            <div>
-              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Forward Host / IP *</label>
-              <input type="text" class="form-input" id="input-forward-host" placeholder="127.0.0.1" value="127.0.0.1" required style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+          </div>
+
+          <!-- SECTION A: REVERSE PROXY SETTINGS -->
+          <div id="section-proxy-fields">
+            <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 0.65rem; margin-bottom: 1rem;">
+              <div>
+                <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Scheme</label>
+                <select id="input-forward-scheme" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+                  <option value="http">http</option>
+                  <option value="https">https</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Forward Host / IP *</label>
+                <input type="text" class="form-input" id="input-forward-host" placeholder="127.0.0.1" value="127.0.0.1" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+              </div>
+              <div>
+                <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Port *</label>
+                <input type="number" class="form-input" id="input-forward-port" placeholder="8080" value="8080" style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+              </div>
             </div>
-            <div>
-              <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Port *</label>
-              <input type="number" class="form-input" id="input-forward-port" placeholder="8080" value="8080" required style="width: 100%; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.88rem;">
+          </div>
+
+          <!-- SECTION B: LEMP STACK (PHP-FPM) SETTINGS -->
+          <div id="section-lemp-fields" style="display: none; background: rgba(147, 51, 234, 0.04); border: 1px solid rgba(147, 51, 234, 0.25); border-radius: 9px; padding: 0.85rem; margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+              <span style="font-weight: 700; font-size: 0.8rem; color: var(--text-main);">PHP-FPM & Document Root Configuration</span>
+              <div style="display: flex; gap: 0.35rem;">
+                <button type="button" class="btn-secondary btn-sm" id="btn-preset-wordpress" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">WordPress</button>
+                <button type="button" class="btn-secondary btn-sm" id="btn-preset-laravel" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">Laravel</button>
+                <button type="button" class="btn-secondary btn-sm" id="btn-preset-generic-php" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">Custom PHP</button>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0.75rem;">
+              <label style="display: block; font-weight: 700; font-size: 0.8rem; margin-bottom: 0.3rem; color: var(--text-main);">Document Root Directory *</label>
+              <input type="text" class="form-input" id="input-root-path" placeholder="/var/www/site.com/public" style="width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem; font-family: 'JetBrains Mono', monospace;">
+              <small style="color: var(--text-muted); font-size: 0.72rem; display: block; margin-top: 0.2rem;">Directory containing index.php (e.g. /var/www/example.com/public or /var/www/html/example.com)</small>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 0.65rem;">
+              <div>
+                <label style="display: block; font-weight: 700; font-size: 0.8rem; margin-bottom: 0.3rem; color: var(--text-main);">PHP Version</label>
+                <select id="select-php-version" style="width: 100%; padding: 0.5rem 0.6rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem;">
+                  <option value="auto">Auto-Detect</option>
+                  <option value="8.4">PHP 8.4</option>
+                  <option value="8.3">PHP 8.3</option>
+                  <option value="8.2" selected>PHP 8.2</option>
+                  <option value="8.1">PHP 8.1</option>
+                  <option value="8.0">PHP 8.0</option>
+                  <option value="7.4">PHP 7.4</option>
+                  <option value="custom">Custom Socket</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-weight: 700; font-size: 0.8rem; margin-bottom: 0.3rem; color: var(--text-main);">FastCGI Pass Destination</label>
+                <input type="text" class="form-input" id="input-php-socket" placeholder="unix:/run/php/php8.2-fpm.sock or 127.0.0.1:9000" style="width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem; font-family: 'JetBrains Mono', monospace;">
+              </div>
+            </div>
+          </div>
+
+          <!-- SECTION C: STATIC SITE SETTINGS -->
+          <div id="section-static-fields" style="display: none; background: rgba(14, 165, 233, 0.04); border: 1px solid rgba(14, 165, 233, 0.25); border-radius: 9px; padding: 0.85rem; margin-bottom: 1rem;">
+            <div class="form-group">
+              <label style="display: block; font-weight: 700; font-size: 0.8rem; margin-bottom: 0.3rem; color: var(--text-main);">Static Document Root *</label>
+              <input type="text" class="form-input" id="input-static-root-path" placeholder="/var/www/site.com" style="width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem; font-family: 'JetBrains Mono', monospace;">
+              <small style="color: var(--text-muted); font-size: 0.72rem; display: block; margin-top: 0.2rem;">Location on disk containing index.html and static assets (CSS, JS, images).</small>
             </div>
           </div>
 
           <!-- Feature Toggles -->
           <div style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 9px; padding: 0.85rem; margin-bottom: 1rem;">
-            <div style="font-weight: 700; font-size: 0.8rem; margin-bottom: 0.6rem; color: var(--text-main);">Proxy Protections & Protocol Options</div>
+            <div style="font-weight: 700; font-size: 0.8rem; margin-bottom: 0.6rem; color: var(--text-main);">Security & Protocol Directives</div>
             
-            <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer;">
+            <label id="row-toggle-websocket" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer;">
               <div>
                 <div style="font-size: 0.84rem; font-weight: 600;">WebSocket Support</div>
-                <div style="font-size: 0.74rem; color: var(--text-muted);">Enable Upgrade and Connection headers</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Enable Upgrade and Connection headers (Reverse Proxy only)</div>
               </div>
               <input type="checkbox" id="input-websocket" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
             </label>
 
             <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer;">
               <div>
-                <div style="font-size: 0.84rem; font-weight: 600;">Block Common Exploits</div>
-                <div style="font-size: 0.74rem; color: var(--text-muted);">Shield hidden files (.git, .env) and malicious queries</div>
+                <div style="font-size: 0.84rem; font-weight: 600;">Block Common Exploits & Sensitive Files</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Shield .git, .env, wp-config.php, composer.json, package.json, and SQLi signatures</div>
               </div>
               <input type="checkbox" id="input-block-exploits" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
             </label>
 
             <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
               <div>
-                <div style="font-size: 0.84rem; font-weight: 600;">Enforce SSL (HTTPS Redirect)</div>
-                <div style="font-size: 0.74rem; color: var(--text-muted);">Redirect HTTP to HTTPS via Let's Encrypt</div>
+                <div style="font-size: 0.84rem; font-weight: 600;">Enforce SSL (HTTPS Port 443)</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">HTTP Port 80 redirect with Let's Encrypt / Custom SSL</div>
               </div>
               <input type="checkbox" id="input-ssl-forced" checked style="width: 16px; height: 16px; accent-color: var(--secondary);">
             </label>
@@ -1236,14 +1320,39 @@
             <input type="text" id="input-suspended-reason" placeholder="Administrative Maintenance or Account Review" value="Administrative Maintenance or Policy Enforcement" style="width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-size: 0.84rem;">
           </div>
 
-          <div>
-            <label style="display: block; font-weight: 700; font-size: 0.82rem; margin-bottom: 0.35rem; color: var(--text-main);">Custom Nginx Directives (Optional)</label>
-            <textarea id="input-custom-nginx" placeholder="# Additional location directives&#10;client_max_body_size 50M;" style="width: 100%; min-height: 70px; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-family: var(--font-primary); font-size: 0.8rem;"></textarea>
+          <div style="margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.45rem;">
+              <label style="font-weight: 700; font-size: 0.82rem; color: var(--text-main);">IP Access Control & Whitelisting</label>
+              <div style="display: flex; gap: 0.4rem;">
+                <button type="button" class="btn-secondary btn-sm" id="btn-preset-whitelist" style="font-size: 0.72rem; padding: 0.2rem 0.55rem; color: var(--secondary); border-color: rgba(2, 132, 199, 0.4);" title="Insert SUN Network, RENU Link, and VPN Whitelist Rules">
+                  Apply SUN / RENU / VPN Whitelist
+                </button>
+                <button type="button" class="btn-secondary btn-sm" id="btn-clear-whitelist" style="font-size: 0.72rem; padding: 0.2rem 0.55rem;" title="Reset to Public / Allow All">
+                  Public (Allow All)
+                </button>
+              </div>
+            </div>
+            <div style="font-size: 0.73rem; color: var(--text-muted); margin-bottom: 0.35rem;">
+              Restrict access to authorized subnets. In Nginx syntax, allow directives evaluate sequentially before <code style="color: var(--secondary);">deny all;</code>.
+            </div>
+            <textarea id="input-custom-nginx" placeholder="# Additional Nginx directives or IP whitelist rules&#10;allow 137.63.181.0/24; # SUN Network&#10;allow 102.34.0.0/16;   # RENU Link&#10;allow 107.155.122.15;  # VPN&#10;deny all;" style="width: 100%; min-height: 85px; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--text-main); font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; line-height: 1.45;"></textarea>
+          </div>
+
+          <!-- Live Generated Nginx Syntax Preview Container -->
+          <div id="modal-syntax-preview-wrapper" style="display: none; margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 0.85rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.45rem;">
+              <span style="font-weight: 700; font-size: 0.8rem; color: var(--text-main);">Live Nginx Syntax Preview</span>
+              <span style="font-size: 0.72rem; color: #38bdf8;">Production Config</span>
+            </div>
+            <pre id="modal-syntax-preview-code" style="margin: 0; max-height: 180px; overflow-y: auto; background: #090d16; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #38bdf8; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; line-height: 1.45;"></pre>
           </div>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn-secondary" id="btn-cancel-host-modal">Cancel</button>
-          <button type="submit" class="btn-primary" id="btn-save-host">Save Proxy Host</button>
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+          <button type="button" class="btn-secondary" id="btn-modal-preview-syntax" title="Toggle live Nginx syntax preview">Preview Syntax</button>
+          <div style="display: flex; gap: 0.5rem;">
+            <button type="button" class="btn-secondary" id="btn-cancel-host-modal">Cancel</button>
+            <button type="submit" class="btn-primary" id="btn-save-host">Save Virtual Host</button>
+          </div>
         </div>
       </form>
     </div>

@@ -26,21 +26,31 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastUserActivity = Date.now();
 
   async function verifySession() {
-    if (!sessionToken) {
-      window.location.href = '/login?require_auth=1';
+    const token = localStorage.getItem('nova_session_token') || localStorage.getItem('nova_token');
+    if (!token) {
+      window.location.replace('/login?require_auth=1');
       return;
     }
 
-    try {
-      const res = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${sessionToken}`
-        }
+    async function checkAuth() {
+      return await fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
+    }
+
+    try {
+      let res = await checkAuth();
+      if (!res.ok && res.status === 401) {
+        // Quick 1-time retry to absorb transient race conditions during redirects
+        await new Promise(r => setTimeout(r, 300));
+        res = await checkAuth();
+      }
+
       if (!res.ok) {
         localStorage.removeItem('nova_session_token');
+        localStorage.removeItem('nova_token');
         localStorage.removeItem('nova_current_user');
-        window.location.href = '/login?session_expired=1';
+        window.location.replace('/login?session_expired=1');
         return;
       }
       const data = await res.json();
@@ -297,6 +307,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnOpenCreate) {
       const canCreate = isSuperAdmin || perms.includes('create_host');
       btnOpenCreate.style.display = canCreate ? 'inline-flex' : 'none';
+    }
+
+    // Quick Reload Nginx button permission
+    const btnQuickReload = document.getElementById('btn-quick-reload-nginx');
+    if (btnQuickReload) {
+      const canReload = isSuperAdmin || perms.includes('edit_hosts');
+      btnQuickReload.style.display = canReload ? 'inline-flex' : 'none';
     }
   }
 
@@ -724,14 +741,48 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </td>
           <td>
-            <span class="target-badge">
-              <span style="color: var(--secondary);">${escapeHtml(h.forward_scheme)}://</span>${escapeHtml(h.forward_host)}:${h.forward_port}
-            </span>
+            ${(() => {
+              const hType = (h.host_type || 'proxy').toLowerCase();
+              if (hType === 'lemp') {
+                const rPath = h.root_path || `/var/www/${primaryDomain}/public`;
+                return `
+                  <div style="display: flex; flex-direction: column; gap: 0.2rem;">
+                    <span class="target-badge" style="background: rgba(147, 51, 234, 0.08); border-color: rgba(147, 51, 234, 0.25); color: #c084fc;" title="LEMP Document Root">
+                      <span style="color: #a855f7; font-weight: 700;">root:</span> ${escapeHtml(rPath)}
+                    </span>
+                    <span style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">FastCGI: ${escapeHtml(h.php_fpm_socket || 'php' + (h.php_version || '8.2') + '-fpm')}</span>
+                  </div>
+                `;
+              } else if (hType === 'static') {
+                const rPath = h.root_path || `/var/www/${primaryDomain}`;
+                return `
+                  <span class="target-badge" style="background: rgba(14, 165, 233, 0.08); border-color: rgba(14, 165, 233, 0.25); color: #38bdf8;" title="Static Document Root">
+                    <span style="color: var(--secondary); font-weight: 700;">root:</span> ${escapeHtml(rPath)}
+                  </span>
+                `;
+              } else {
+                return `
+                  <span class="target-badge">
+                    <span style="color: var(--secondary);">${escapeHtml(h.forward_scheme)}://</span>${escapeHtml(h.forward_host)}:${h.forward_port}
+                  </span>
+                `;
+              }
+            })()}
           </td>
           <td>
             <div style="display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center;">
+              ${(() => {
+                const hType = (h.host_type || 'proxy').toLowerCase();
+                if (hType === 'lemp') {
+                  return `<span class="badge-tag" style="background: rgba(147, 51, 234, 0.15); color: #c084fc; font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 5px; font-weight: 700;">LEMP &bull; PHP ${escapeHtml(h.php_version || 'auto')}</span>`;
+                } else if (hType === 'static') {
+                  return `<span class="badge-tag" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8; font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 5px; font-weight: 700;">STATIC</span>`;
+                } else {
+                  return `<span class="badge-tag" style="background: rgba(99, 102, 241, 0.12); color: #818cf8; font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 5px; font-weight: 700;">PROXY</span>`;
+                }
+              })()}
               <span class="badge-tag" style="background: rgba(99, 102, 241, 0.12); color: #818cf8; font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 5px; font-weight: 700;" title="Configured Application Name">${escapeHtml(h.app_name || 'Web App')}</span>
-              ${h.websocket_support ? `<span class="badge-tag" style="background: rgba(2, 132, 199, 0.1); color: var(--secondary); font-size: 0.7rem; padding: 0.15rem 0.45rem; border-radius: 5px; font-weight: 700;">WS</span>` : ''}
+              ${((h.host_type || 'proxy').toLowerCase() === 'proxy' && h.websocket_support) ? `<span class="badge-tag" style="background: rgba(2, 132, 199, 0.1); color: var(--secondary); font-size: 0.7rem; padding: 0.15rem 0.45rem; border-radius: 5px; font-weight: 700;">WS</span>` : ''}
               ${h.block_exploits ? `<span class="badge-tag" style="background: rgba(16, 185, 129, 0.1); color: var(--accent-emerald); font-size: 0.7rem; padding: 0.15rem 0.45rem; border-radius: 5px; font-weight: 700;">WAF</span>` : ''}
             </div>
           </td>
@@ -886,15 +937,277 @@ document.addEventListener('DOMContentLoaded', () => {
   const hostModal = document.getElementById('host-modal');
   const hostForm = document.getElementById('host-form');
   const hostModalTitle = document.getElementById('host-modal-title');
+  const modalSyntaxPreviewWrapper = document.getElementById('modal-syntax-preview-wrapper');
+  const modalSyntaxPreviewCode = document.getElementById('modal-syntax-preview-code');
+  const btnModalPreviewSyntax = document.getElementById('btn-modal-preview-syntax');
+
+  // Helper: Switch Host Stack Mode in Modal
+  function setHostStackType(type) {
+    const isProxy = type === 'proxy';
+    const isLemp = type === 'lemp';
+    const isStatic = type === 'static';
+
+    const radioProxy = document.getElementById('radio-stack-proxy');
+    const radioLemp = document.getElementById('radio-stack-lemp');
+    const radioStatic = document.getElementById('radio-stack-static');
+    if (radioProxy) radioProxy.checked = isProxy;
+    if (radioLemp) radioLemp.checked = isLemp;
+    if (radioStatic) radioStatic.checked = isStatic;
+
+    const optProxy = document.getElementById('opt-stack-proxy');
+    const optLemp = document.getElementById('opt-stack-lemp');
+    const optStatic = document.getElementById('opt-stack-static');
+
+    if (optProxy) {
+      optProxy.style.border = isProxy ? '2px solid var(--secondary)' : '1px solid var(--border-color)';
+      optProxy.style.background = isProxy ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg-main)';
+    }
+    if (optLemp) {
+      optLemp.style.border = isLemp ? '2px solid #a855f7' : '1px solid var(--border-color)';
+      optLemp.style.background = isLemp ? 'rgba(168, 85, 247, 0.08)' : 'var(--bg-main)';
+    }
+    if (optStatic) {
+      optStatic.style.border = isStatic ? '2px solid #0ea5e9' : '1px solid var(--border-color)';
+      optStatic.style.background = isStatic ? 'rgba(14, 165, 233, 0.08)' : 'var(--bg-main)';
+    }
+
+    const secProxy = document.getElementById('section-proxy-fields');
+    const secLemp = document.getElementById('section-lemp-fields');
+    const secStatic = document.getElementById('section-static-fields');
+    const rowWs = document.getElementById('row-toggle-websocket');
+
+    if (secProxy) secProxy.style.display = isProxy ? 'block' : 'none';
+    if (secLemp) secLemp.style.display = isLemp ? 'block' : 'none';
+    if (secStatic) secStatic.style.display = isStatic ? 'block' : 'none';
+    if (rowWs) rowWs.style.display = isProxy ? 'flex' : 'none';
+  }
+
+  // Radio and label click listeners for stack type
+  ['proxy', 'lemp', 'static'].forEach(type => {
+    const radio = document.getElementById(`radio-stack-${type}`);
+    const opt = document.getElementById(`opt-stack-${type}`);
+    if (radio) {
+      radio.addEventListener('change', () => {
+        if (radio.checked) setHostStackType(type);
+      });
+    }
+    if (opt) {
+      opt.addEventListener('click', (e) => {
+        if (e.target !== radio) {
+          setHostStackType(type);
+        }
+      });
+    }
+  });
+
+  // Fetch host PHP runtimes
+  async function fetchPhpRuntimes() {
+    try {
+      const res = await fetch('/api/php-runtimes');
+      if (!res.ok) return;
+      const data = await res.json();
+      const selectPhp = document.getElementById('select-php-version');
+      if (selectPhp && data.detected_versions && data.detected_versions.length > 0) {
+        Array.from(selectPhp.options).forEach(opt => {
+          if (data.detected_versions.includes(opt.value)) {
+            opt.textContent = `PHP ${opt.value} (Detected)`;
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('Probe error for PHP runtimes:', e);
+    }
+  }
+
+  const selectPhpVersion = document.getElementById('select-php-version');
+  const inputPhpSocket = document.getElementById('input-php-socket');
+  if (selectPhpVersion && inputPhpSocket) {
+    selectPhpVersion.addEventListener('change', () => {
+      const ver = selectPhpVersion.value;
+      if (ver === 'auto') {
+        inputPhpSocket.value = '';
+        inputPhpSocket.placeholder = 'Auto-detecting primary PHP socket on host...';
+      } else if (ver === 'custom') {
+        if (!inputPhpSocket.value) {
+          inputPhpSocket.value = '127.0.0.1:9000';
+        }
+      } else {
+        inputPhpSocket.value = `unix:/run/php/php${ver}-fpm.sock`;
+      }
+    });
+  }
+
+  // Framework Presets
+  const btnPresetWordpress = document.getElementById('btn-preset-wordpress');
+  const btnPresetLaravel = document.getElementById('btn-preset-laravel');
+  const btnPresetGenericPhp = document.getElementById('btn-preset-generic-php');
+
+  function getFirstHostDomain() {
+    const raw = (document.getElementById('input-domain-names').value || '').trim();
+    if (!raw) return 'example.com';
+    const first = raw.split(/[\s,]+/)[0].trim();
+    return first || 'example.com';
+  }
+
+  if (btnPresetWordpress) {
+    btnPresetWordpress.addEventListener('click', () => {
+      const d = getFirstHostDomain();
+      document.getElementById('input-root-path').value = `/var/www/${d}/public`;
+      showToast('Configured WordPress document root (/public)', 'info');
+    });
+  }
+  if (btnPresetLaravel) {
+    btnPresetLaravel.addEventListener('click', () => {
+      const d = getFirstHostDomain();
+      document.getElementById('input-root-path').value = `/var/www/${d}/public`;
+      showToast('Configured Laravel document root (/public)', 'info');
+    });
+  }
+  if (btnPresetGenericPhp) {
+    btnPresetGenericPhp.addEventListener('click', () => {
+      const d = getFirstHostDomain();
+      document.getElementById('input-root-path').value = `/var/www/${d}`;
+      showToast('Configured Custom PHP document root', 'info');
+    });
+  }
+
+  // Quick Reload Nginx Button
+  const btnQuickReloadNginx = document.getElementById('btn-quick-reload-nginx');
+  if (btnQuickReloadNginx) {
+    btnQuickReloadNginx.addEventListener('click', async () => {
+      btnQuickReloadNginx.disabled = true;
+      const origHtml = btnQuickReloadNginx.innerHTML;
+      btnQuickReloadNginx.innerHTML = `Testing & Reloading...`;
+      try {
+        const res = await fetch('/api/nginx/reload', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`
+          }
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || 'Nginx reloaded successfully', 'success');
+        } else {
+          showToast(data.detail || data.error || 'Failed to reload Nginx', 'error');
+        }
+      } catch (err) {
+        showToast('Error sending reload request: ' + err.message, 'error');
+      } finally {
+        btnQuickReloadNginx.disabled = false;
+        btnQuickReloadNginx.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // Live Syntax Preview
+  if (btnModalPreviewSyntax && modalSyntaxPreviewWrapper && modalSyntaxPreviewCode) {
+    btnModalPreviewSyntax.addEventListener('click', () => {
+      if (modalSyntaxPreviewWrapper.style.display !== 'none') {
+        modalSyntaxPreviewWrapper.style.display = 'none';
+        btnModalPreviewSyntax.textContent = 'Preview Syntax';
+        return;
+      }
+
+      const domainNames = (document.getElementById('input-domain-names').value || '').trim() || 'example.com';
+      const hostType = document.getElementById('radio-stack-lemp')?.checked ? 'lemp' : (document.getElementById('radio-stack-static')?.checked ? 'static' : 'proxy');
+      const sslForced = document.getElementById('input-ssl-forced').checked;
+      const blockExploits = document.getElementById('input-block-exploits').checked;
+      const customNginx = (document.getElementById('input-custom-nginx').value || '').trim();
+
+      let conf = `# --- Generated Nginx Server Block for: ${domainNames} ---\n`;
+      conf += `server {\n`;
+      conf += `    listen 80;\n`;
+      conf += `    listen [::]:80;\n`;
+      conf += `    server_name ${domainNames};\n\n`;
+
+      if (customNginx) {
+        conf += `    # Custom Directives & IP Access Rules\n`;
+        customNginx.split('\n').forEach(line => {
+          conf += `    ${line}\n`;
+        });
+        conf += `\n`;
+      }
+
+      if (hostType === 'lemp') {
+        const rootPath = (document.getElementById('input-root-path').value || '').trim() || '/var/www/site/public';
+        const phpVer = document.getElementById('select-php-version').value;
+        const phpSock = (document.getElementById('input-php-socket').value || '').trim() || (phpVer !== 'auto' && phpVer !== 'custom' ? `unix:/run/php/php${phpVer}-fpm.sock` : 'unix:/run/php/php8.2-fpm.sock');
+        conf += `    root ${rootPath};\n`;
+        conf += `    index index.php index.html index.htm;\n\n`;
+        conf += `    location / {\n`;
+        conf += `        try_files $uri $uri/ /index.php?$query_string;\n`;
+        conf += `    }\n\n`;
+        conf += `    location ~ \\.php$ {\n`;
+        conf += `        include snippets/fastcgi-php.conf;\n`;
+        conf += `        fastcgi_pass ${phpSock};\n`;
+        conf += `        fastcgi_intercept_errors on;\n`;
+        conf += `    }\n`;
+      } else if (hostType === 'static') {
+        const staticRoot = (document.getElementById('input-static-root-path').value || '').trim() || '/var/www/site';
+        conf += `    root ${staticRoot};\n`;
+        conf += `    index index.html index.htm;\n\n`;
+        conf += `    location / {\n`;
+        conf += `        try_files $uri $uri/ /index.html =404;\n`;
+        conf += `    }\n`;
+      } else {
+        const scheme = document.getElementById('input-forward-scheme').value;
+        const fHost = (document.getElementById('input-forward-host').value || '').trim() || '127.0.0.1';
+        const fPort = (document.getElementById('input-forward-port').value || '').trim() || '8080';
+        const ws = document.getElementById('input-websocket').checked;
+        conf += `    location / {\n`;
+        conf += `        proxy_pass ${scheme}://${fHost}:${fPort};\n`;
+        conf += `        proxy_set_header Host $host;\n`;
+        conf += `        proxy_set_header X-Real-IP $remote_addr;\n`;
+        conf += `        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n`;
+        conf += `        proxy_set_header X-Forwarded-Proto $scheme;\n`;
+        if (ws) {
+          conf += `        proxy_http_version 1.1;\n`;
+          conf += `        proxy_set_header Upgrade $http_upgrade;\n`;
+          conf += `        proxy_set_header Connection "upgrade";\n`;
+        }
+        conf += `    }\n`;
+      }
+
+      if (blockExploits) {
+        conf += `\n    # Security: Shield configuration and hidden files\n`;
+        conf += `    location ~ /\\.(?!well-known) { deny all; }\n`;
+        conf += `    location ~* (wp-config\\.php|composer\\.(json|lock)|package\\.json|\\.env|\\.git) { deny all; }\n`;
+      }
+
+      conf += `}\n`;
+
+      modalSyntaxPreviewCode.textContent = conf;
+      modalSyntaxPreviewWrapper.style.display = 'block';
+      btnModalPreviewSyntax.textContent = 'Hide Preview';
+    });
+  }
 
   document.getElementById('btn-open-create-modal').addEventListener('click', () => {
     if (!isSuperAdminRole(activeRole) && activeRole !== 'webmaster') {
       showToast('Permission denied: Your role cannot add domains', 'error');
       return;
     }
-    hostModalTitle.textContent = 'Add New Proxy Host';
+    hostModalTitle.textContent = 'Add New Virtual Host';
     document.getElementById('edit-host-id').value = '';
     hostForm.reset();
+    setHostStackType('proxy');
+    if (modalSyntaxPreviewWrapper) modalSyntaxPreviewWrapper.style.display = 'none';
+    if (btnModalPreviewSyntax) btnModalPreviewSyntax.textContent = 'Preview Syntax';
+
+    const fieldsToToggle = [
+      'input-domain-names', 'input-app-name', 'input-forward-scheme',
+      'input-forward-host', 'input-forward-port', 'input-websocket',
+      'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason',
+      'radio-stack-proxy', 'radio-stack-lemp', 'radio-stack-static',
+      'input-root-path', 'select-php-version', 'input-php-socket',
+      'input-static-root-path', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
+    ];
+    fieldsToToggle.forEach(fId => {
+      const el = document.getElementById(fId);
+      if (el) el.disabled = false;
+    });
+
     document.getElementById('input-app-name').value = '';
     document.getElementById('input-forward-scheme').value = 'http';
     document.getElementById('input-forward-host').value = '127.0.0.1';
@@ -903,6 +1216,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('input-block-exploits').checked = true;
     document.getElementById('input-ssl-forced').checked = true;
     document.getElementById('input-suspended-reason').value = 'Administrative Policy Suspension';
+    document.getElementById('input-root-path').value = '';
+    document.getElementById('input-static-root-path').value = '';
+    document.getElementById('select-php-version').value = 'auto';
+    document.getElementById('input-php-socket').value = '';
+
+    fetchPhpRuntimes();
     hostModal.classList.add('open');
   });
 
@@ -913,6 +1232,32 @@ document.addEventListener('DOMContentLoaded', () => {
     hostModal.classList.remove('open');
   });
 
+  const btnPresetWhitelist = document.getElementById('btn-preset-whitelist');
+  const btnClearWhitelist = document.getElementById('btn-clear-whitelist');
+  if (btnPresetWhitelist) {
+    btnPresetWhitelist.addEventListener('click', () => {
+      const customEl = document.getElementById('input-custom-nginx');
+      const presetDirectives = `# Restrict Access to Authorized IP Networks\nallow 137.63.181.0/24; # SUN Network\nallow 102.34.0.0/16;   # RENU Link\nallow 107.155.122.15;  # VPN\ndeny all;\n`;
+      const cur = (customEl.value || '').trim();
+      if (!cur) {
+        customEl.value = presetDirectives;
+      } else if (!cur.includes('137.63.181.0/24')) {
+        customEl.value = presetDirectives + '\n' + cur;
+      }
+      showToast('Inserted SUN / RENU / VPN Whitelist Directives', 'success');
+    });
+  }
+
+  if (btnClearWhitelist) {
+    btnClearWhitelist.addEventListener('click', () => {
+      const customEl = document.getElementById('input-custom-nginx');
+      let lines = (customEl.value || '').split('\n');
+      lines = lines.filter(l => !l.includes('137.63.181.0') && !l.includes('102.34.0.0') && !l.includes('107.155.122.15') && !l.trim().startsWith('deny all') && !l.includes('Authorized IP Access'));
+      customEl.value = lines.join('\n').trim();
+      showToast('Access restriction reset to Public (Allow All)', 'info');
+    });
+  }
+
   window.openEditHostModal = function(id) {
     if (!isSuperAdminRole(activeRole) && activeRole !== 'domain_manager') {
       showToast('Permission denied: Only Super Admin and Domain Managers can edit hosts', 'error');
@@ -922,33 +1267,48 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!h) return;
 
     const isDomainMgr = (activeRole === 'domain_manager' || h.can_edit_nginx_only);
-    hostModalTitle.textContent = isDomainMgr ? `Edit Custom Nginx Configuration (${h.domain_names})` : `Edit Proxy Host #${h.id}`;
+    hostModalTitle.textContent = isDomainMgr ? `Edit Custom Nginx Configuration (${h.domain_names})` : `Edit Host #${h.id} (${h.domain_names})`;
     document.getElementById('edit-host-id').value = h.id;
-    
+    if (modalSyntaxPreviewWrapper) modalSyntaxPreviewWrapper.style.display = 'none';
+    if (btnModalPreviewSyntax) btnModalPreviewSyntax.textContent = 'Preview Syntax';
+
     // Enable or disable fields based on role
     const fieldsToToggle = [
       'input-domain-names', 'input-app-name', 'input-forward-scheme',
       'input-forward-host', 'input-forward-port', 'input-websocket',
-      'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason'
+      'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason',
+      'radio-stack-proxy', 'radio-stack-lemp', 'radio-stack-static',
+      'input-root-path', 'select-php-version', 'input-php-socket',
+      'input-static-root-path', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
     ];
     fieldsToToggle.forEach(fId => {
       const el = document.getElementById(fId);
       if (el) el.disabled = isDomainMgr;
     });
 
+    const stackType = h.host_type || 'proxy';
+    setHostStackType(stackType);
+
     document.getElementById('input-domain-names').value = h.domain_names;
     document.getElementById('input-app-name').value = h.app_name || '';
-    document.getElementById('input-forward-scheme').value = h.forward_scheme;
-    document.getElementById('input-forward-host').value = h.forward_host;
-    document.getElementById('input-forward-port').value = h.forward_port;
-    document.getElementById('input-websocket').checked = h.websocket_support;
-    document.getElementById('input-block-exploits').checked = h.block_exploits;
-    document.getElementById('input-ssl-forced').checked = h.ssl_forced;
+    document.getElementById('input-forward-scheme').value = h.forward_scheme || 'http';
+    document.getElementById('input-forward-host').value = h.forward_host || '127.0.0.1';
+    document.getElementById('input-forward-port').value = h.forward_port || 8080;
+    document.getElementById('input-websocket').checked = !!h.websocket_support;
+    document.getElementById('input-block-exploits').checked = !!h.block_exploits;
+    document.getElementById('input-ssl-forced').checked = !!h.ssl_forced;
     document.getElementById('input-suspended-reason').value = h.suspended_reason || 'Administrative Policy Suspension';
     
+    document.getElementById('input-root-path').value = h.root_path || '';
+    document.getElementById('input-static-root-path').value = (stackType === 'static' ? h.root_path : '') || '';
+    document.getElementById('select-php-version').value = h.php_version || 'auto';
+    document.getElementById('input-php-socket').value = h.php_fpm_socket || '';
+
     const customNginxEl = document.getElementById('input-custom-nginx');
     customNginxEl.value = h.custom_nginx_config || '';
     customNginxEl.disabled = false;
+
+    fetchPhpRuntimes();
 
     if (isDomainMgr) {
       setTimeout(() => {
@@ -968,12 +1328,43 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    let hostType = 'proxy';
+    if (document.getElementById('radio-stack-lemp')?.checked) {
+      hostType = 'lemp';
+    } else if (document.getElementById('radio-stack-static')?.checked) {
+      hostType = 'static';
+    }
+
+    let rootPath = null;
+    let phpVersion = null;
+    let phpFpmSocket = null;
+
+    if (hostType === 'lemp') {
+      rootPath = (document.getElementById('input-root-path').value || '').trim();
+      if (!rootPath) {
+        showToast('Please specify a Document Root directory for LEMP Stack', 'error');
+        return;
+      }
+      phpVersion = document.getElementById('select-php-version').value;
+      phpFpmSocket = (document.getElementById('input-php-socket').value || '').trim() || null;
+    } else if (hostType === 'static') {
+      rootPath = (document.getElementById('input-static-root-path').value || '').trim();
+      if (!rootPath) {
+        showToast('Please specify a Document Root directory for Static Site', 'error');
+        return;
+      }
+    }
+
     const payload = {
       domain_names: document.getElementById('input-domain-names').value.trim(),
       app_name: (document.getElementById('input-app-name').value || '').trim() || 'Web Application',
+      host_type: hostType,
+      root_path: rootPath,
+      php_version: phpVersion,
+      php_fpm_socket: phpFpmSocket,
       forward_scheme: document.getElementById('input-forward-scheme').value,
       forward_host: document.getElementById('input-forward-host').value.trim(),
-      forward_port: parseInt(document.getElementById('input-forward-port').value, 10),
+      forward_port: parseInt(document.getElementById('input-forward-port').value, 10) || 80,
       websocket_support: document.getElementById('input-websocket').checked,
       block_exploits: document.getElementById('input-block-exploits').checked,
       ssl_forced: document.getElementById('input-ssl-forced').checked,
@@ -1008,7 +1399,7 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(err.detail || 'Error saving host');
       }
 
-      showToast(editId ? 'Proxy host updated successfully' : 'Proxy host created successfully', 'success');
+      showToast(editId ? 'Virtual host updated successfully' : 'Virtual host created successfully', 'success');
       hostModal.classList.remove('open');
       loadHosts();
     } catch (err) {
@@ -3031,6 +3422,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadRolePermissionsMatrix();
   loadHosts();
   loadSystemMetrics();
+  fetchPhpRuntimes();
 
   // Live telemetry polling (3s interval)
   setInterval(loadSystemMetrics, 3000);

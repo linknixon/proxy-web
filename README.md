@@ -35,12 +35,35 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
 
 ## Key Features & Capabilities
 
-### 1. Reverse Proxy & Upstream Routing
+### 1. Reverse Proxy, CloudPanel & LEMP Stack Flexibility
+- **Hybrid Architecture Engine**: Seamlessly deploy and manage both **Reverse Proxy / Upstream Clusters** (Node.js, Python, Docker, Go, CloudPanel) and native **LEMP Stack hosts** (PHP-FPM, WordPress, Laravel, Symfony, custom PHP), alongside static SPAs.
+- **PHP-FPM Auto-Discovery**: Automatically probes system PHP runtimes (`/run/php/php*-fpm.sock`, PHP 8.4, 8.3, 8.2, 8.1, 8.0, 7.4) and provides 1-click presets for WordPress, Laravel (`/public`), and Custom PHP.
+- **Production FastCGI Standards**: Generates pristine Nginx PHP directives including `try_files $uri $uri/ /index.php?$query_string;`, `fastcgi_intercept_errors on;`, static asset cache expirations (30d), and 64M client body uploads.
 - **Apex Domains & Subdomains**: Full routing support for primary apex domains (`example.com`, `sun.ac.ug`) and subdomains (`portal.example.com`, `api.sun.ac.ug`).
-- **Application Labeling**: Assign friendly service labels to each virtual host (e.g., *Core ERP*, *Student Portal*, *API Gateway*).
-- **Production Directives**: Automated WebSocket upgrade headers (`Upgrade`, `Connection`), HTTP/1.1 keep-alives, SSL redirection, and exploit path blocking.
+- **Application Labeling**: Assign friendly service labels to each virtual host (e.g., *Core ERP*, *Student Portal*, *WordPress Blog*).
 
-### 2. Nginx Syntax Debugger with Line Numbers
+### 2. Zero-Disorganization Nginx Synchronization & Duplicate Prevention
+- **Non-Destructive Parsing**: Resolves configuration overlap between `/etc/nginx/sites-available` and `/etc/nginx/sites-enabled` by prioritizing active enabled sites and skipping duplicate definitions.
+- **Preserves Existing Configurations**: Existing Nginx sites are parsed accurately without converting PHP or static setups into broken proxy definitions.
+- **Automatic Timestamped Backups**: Automatically creates `.bak.<timestamp>` file snapshots before applying changes to any server block.
+- **Live Syntax Testing & Reload**: Includes 1-click **Reload Nginx** action from the UI, executing `nginx -t` pre-flight checks before executing a seamless reload.
+- **Syntax CLI Tool (`extract_nginx_syntax.py`)**: Included standalone Python CLI utility to scan, inspect, and extract active server syntax, upstreams, FastCGI sockets, and document roots across the operating system.
+
+### 3. IP Access Control & Network Whitelisting
+- **Built-in UI Preset**: 1-click button to restrict virtual hosts to trusted organizational subnets with immediate reset to public access:
+  ```nginx
+  allow 137.63.181.0/24; # SUN Network
+  allow 102.34.0.0/16;   # RENU Link
+  allow 107.155.122.15;  # VPN
+  deny all;
+  ```
+
+### 4. Accurate Real-Time WHOIS & Dynamic SSL Expiry
+- **Authoritative Registry Referrals**: Queries IANA and follows root registry referral chains (including ccTLDs such as `.co.ug`, `.ac.ug`, `.org`, `.com`) directly over TCP Port 43 sockets.
+- **Direct Live DNS Nameserver Resolution**: Uses live DNS resolution (`dig +short NS`) to retrieve true active nameservers, avoiding stale registrar records.
+- **Dynamic Host Certificate Expiration**: Directly reads and parses X.509 certificate files (`cert.pem`, `fullchain.pem`) on disk via `cryptography.x509` (or establishes live TLS handshakes for remote domains) to extract real certificate expiry dates.
+
+### 5. Nginx Syntax Debugger with Line Numbers
 - **Precise Error Diagnostics**: When testing or deploying configurations, syntax validation issues explicitly report line numbers:
   - `Line X: Directive missing terminating semicolon ';'`
   - `Line X: Unclosed block directive — opening brace '{' is never closed`
@@ -48,27 +71,27 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
   - `Line X: Unclosed quote (single or double) in directive`
 - **Native `nginx -t` Parser**: Runs real-time syntax checking against the host `nginx` binary and translates compiler line outputs directly into actionable line alerts.
 
-### 3. Role-Based Access Control (RBAC) & Permissions Matrix
+### 6. Role-Based Access Control (RBAC) & Permissions Matrix
 - **Configurable Role Rights**: Super Admin can dynamically configure feature permissions for each system role (`webmaster`, `security`, `billing`).
 - **Webmaster Isolation**: Webmasters are strictly restricted from viewing, modifying, or deleting team user accounts. Team management is locked to Super Admin.
 - **Dynamic Feature Matrix**: Super Admin can customize which roles have access to proxy host management, creation, editing, site suspensions, firewall rules, abuse monitoring, billing timelines, and configuration migration.
 
-### 4. User Profile, Security & Fish-Eye Password Reveals
+### 7. User Profile, Security & Fish-Eye Password Reveals
 - **Circular Profile Widget**: Top-right corner circular avatar displaying user initials and online status dot.
 - **Self-Service Password Updates**: Any logged-in user can update their password via their profile popup with real-time password strength validation.
 - **Immutable User Emails**: Registered email addresses are displayed read-only on profiles to prevent account hijacking; only Super Admin can alter user email addresses.
 - **Fish-Eye Password Reveals**: Interactive eye toggle button on all password fields (login form, password recovery form, change password modal, and user creation form) to reveal or conceal passwords securely.
 
-### 5. Automated Password Recovery via SMTP
+### 8. Automated Password Recovery via SMTP
 - **Email Verification**: Forgot password requests dispatch a cryptographically secure temporary password directly to the user's registered email address.
 - **Strict Blacklist**: Password policy enforces minimum 8 characters with mixed casing, digits, and rejects common dictionary passwords (`123456`, `password`, `admin`, etc.).
 
-### 6. Host UFW Firewall & WAF Engine
+### 9. Host UFW Firewall & WAF Engine
 - **Direct System Synchronization**: Live inspection and management of system packet filter rules (`ufw` engine).
 - **Dual-Stack Support**: Native support for **IPv4** (`192.168.1.0/24`, `10.0.0.1`) and **IPv6** (`2001:db8::/32`, `2001:db8::1`, `::/0`, `Anywhere`).
 - **Rule Actions**: Support for `ALLOW`, `DENY`, and `LIMIT` (brute-force rate limiting).
 
-### 7. Managed Action Email Notifications (SMTP)
+### 10. Managed Action Email Notifications (SMTP)
 - Automated alerts dispatched over outgoing SMTP (`mail.ncloud.co.ug` / custom SMTP with STARTTLS or SSL on port 587 or 465) for:
   - Firewall rule modifications and port updates
   - Domain abuse detections and automated IP drop rules
@@ -77,13 +100,13 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
   - Website maintenance suspensions and reactivations
 - **Live SMTP Diagnostics**: Integrated interactive test dispatch endpoint with real-time socket and authentication error surfacing.
 
-### 8. Web Traffic Logs & Real-Time Error Monitoring
+### 11. Web Traffic Logs & Real-Time Error Monitoring
 - **HTTP Response Telemetry**: Comprehensive tracking of HTTP methods (`GET`, `POST`, `PUT`, `DELETE`), status codes (`200 OK`, `404 Not Found`, `502 Bad Gateway`, `504 Gateway Timeout`), response latencies in milliseconds, and bytes sent.
 - **Upstream Diagnostic Messages**: Immediate surfacing of upstream connection dropouts, connection refused exceptions, and reverse proxy timeout details.
 - **Multi-Node IP Analytics**: Real-time traffic share ranking for the Top 6 client IPs with geographic/datacenter node attribution (*Localhost Console*, *Kampala Fiber Node*, *Entebbe Edge Gateway*, *Cloudflare CDN Proxy*), request counts, and animated gradient visualizers.
 - **Threat & Error Filters**: Instant subtab filtering for All Traffic, Errors Only (4xx & 5xx), Critical 5xx Gateway Incidents, and 4xx Client Anomalies, with search and virtual host dropdown selectors.
 
-### 9. Nginx Migration & Full Configuration Archival
+### 12. Nginx Migration & Full Configuration Archival
 - **Full ZIP Export**: Download all active virtual host configurations as a single `.conf` archive.
 - **Per-Site Export & Import**: Export individual site `.conf` files and import existing Nginx files with automatic extraction of `server_name`, upstream `proxy_pass`, WebSocket headers, and SSL certificates.
 
@@ -360,6 +383,36 @@ export DB_NAME="proxy_manager"
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+---
+
+## Default Administrator Credentials
+
+When the application boots for the first time on a new installation or database, it **automatically provisions default administrator credentials**:
+
+- **Username**: `admin`
+- **Password**: `admin`
+- **Role**: `super_admin` (Full Rights)
+- **Email**: `admin@novacloudedges.com`
+
+> **Note**: You can customize initial credentials prior to first boot via environment variables:
+> ```bash
+> export ADMIN_USER="my_custom_admin"
+> export ADMIN_PASS="MySuperSecretPassword123!"
+> ```
+> On the web login screen, a **Quick Fill** badge is provided for 1-click credential population. Remember to change the password immediately after initial setup using the profile popup in the top navigation bar.
+
+---
+
+## Standalone Nginx Syntax & Upstream Extractor
+
+To safely inspect active Nginx syntax, upstreams, FastCGI PHP sockets, and document roots without altering any production files:
+
+```bash
+python3 extract_nginx_syntax.py
+```
+
+This utility automatically inspects `/etc/nginx/sites-enabled`, `/etc/nginx/sites-available`, and `/etc/nginx/conf.d` and generates a clean architecture report (`Reverse Proxy Upstream`, `LEMP Stack (PHP-FPM)`, or `Static Web / SPA`).
 
 ---
 
