@@ -5,6 +5,15 @@ Centralized high-performance management console for Nginx reverse proxies, Host 
 Maintained by **[Nova Cloud Edges](https://ncloud.co.ug)**  
 Contact us: Email: `support@sun.ac.ug` | Tel: `+256790 00031`
 
+> [!IMPORTANT]
+> **Default Administrator Credentials (Auto-Created on Initial Boot):**
+> - **Username:** `admin`
+> - **Password:** `admin`
+> - **Role:** `super_admin` (Full Administrative Access)
+> - **Access Portal:** `http://<server-ip>:8000/login`
+>
+> When the system boots for the first time, this account is automatically initialized. You can also click the **"Quick Fill (admin / admin)"** badge on the web login screen for instant access.
+
 ---
 
 ## Architecture & System Overview

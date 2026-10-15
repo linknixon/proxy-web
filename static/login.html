@@ -367,17 +367,16 @@
       } else if (urlParams.get('logged_out')) {
         showSuccess('You have safely signed out of Nova Proxy Admin.');
       } else {
-        // Auto-redirect if user already has an active valid session
-        const existingToken = localStorage.getItem('nova_session_token') || localStorage.getItem('nova_token');
-        if (existingToken && !urlParams.get('require_auth')) {
-          fetch('/api/auth/me', {
-            headers: { 'Authorization': `Bearer ${existingToken}` }
-          }).then(r => {
-            if (r.ok) {
-              window.location.replace('/');
-            }
-          }).catch(() => {});
-        }
+      // Auto-redirect if user already has an active valid session
+      const existingToken = localStorage.getItem('nova_session_token') || localStorage.getItem('nova_token');
+      if (existingToken && !urlParams.get('session_expired') && !urlParams.get('logged_out')) {
+        fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${existingToken}` }
+        }).then(r => {
+          if (r.ok) {
+            window.location.replace('/');
+          }
+        }).catch(() => {});
       }
 
       linkForgot.addEventListener('click', (e) => {
@@ -436,9 +435,7 @@
           document.cookie = `nova_session=${encodeURIComponent(data.token)}; path=/; max-age=86400; SameSite=Lax`;
 
           showSuccess('Authenticated! Loading console dashboard...');
-          setTimeout(() => {
-            window.location.replace('/');
-          }, 250);
+          window.location.replace('/');
         } catch (err) {
           showError('Network error connecting to authentication server.');
           btnLogin.disabled = false;

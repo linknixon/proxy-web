@@ -106,8 +106,23 @@ class ProxyHost(Base):
     is_suspended = Column(Boolean, default=False, nullable=False)
     suspended_reason = Column(String(255), default="Administrative Policy Suspension", nullable=True)
     custom_nginx_config = Column(Text, nullable=True)
+    access_rules = Column(Text, nullable=True)  # IP Access Restrictions (e.g. allow 137.63.181.0/24; deny all;)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String(128), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, nullable=False)
+    username = Column(String(100), nullable=False)
+    role = Column(String(50), nullable=False)
+    full_name = Column(String(150), nullable=False)
+    email = Column(String(150), nullable=False)
+    allowed_domains = Column(Text, nullable=True)
+    last_active = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
 class Certificate(Base):
     __tablename__ = "certificates"
@@ -251,6 +266,7 @@ def auto_migrate_schema():
                 safe_add_column("proxy_hosts", "is_suspended", "TINYINT(1) NOT NULL DEFAULT 0")
                 safe_add_column("proxy_hosts", "suspended_reason", "VARCHAR(255) DEFAULT 'Administrative Policy Suspension'")
                 safe_add_column("proxy_hosts", "custom_nginx_config", "TEXT NULL")
+                safe_add_column("proxy_hosts", "access_rules", "TEXT NULL")
                 safe_add_column("proxy_hosts", "created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP")
                 safe_add_column("proxy_hosts", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
 
@@ -313,6 +329,7 @@ class ProxyHostCreate(BaseModel):
     ssl_forced: bool = True
     ssl_provider: str = "Let's Encrypt"
     custom_nginx_config: Optional[str] = None
+    access_rules: Optional[str] = None
 
 class ProxyHostUpdate(BaseModel):
     domain_names: Optional[str] = None
@@ -331,6 +348,7 @@ class ProxyHostUpdate(BaseModel):
     is_suspended: Optional[bool] = None
     suspended_reason: Optional[str] = None
     custom_nginx_config: Optional[str] = None
+    access_rules: Optional[str] = None
 
 class NginxValidationRequest(BaseModel):
     config_text: str
@@ -830,21 +848,53 @@ def _save_persisted_sessions():
 
 ACTIVE_SESSIONS = _load_persisted_sessions()
 
-def create_session(user: User) -> str:
+def create_session(user: User, db: Optional[Session] = None) -> str:
     token = secrets.token_urlsafe(32)
-    ACTIVE_SESSIONS[token] = {
+    now = datetime.datetime.utcnow()
+    sess_data = {
         "user_id": user.id,
         "username": user.username,
         "role": user.role,
         "full_name": user.full_name,
         "email": user.email,
         "allowed_domains": getattr(user, "allowed_domains", "") or "",
-        "last_active": datetime.datetime.utcnow()
+        "last_active": now
     }
+    ACTIVE_SESSIONS[token] = sess_data
     _save_persisted_sessions()
+
+    # Synchronize session directly in database
+    close_db = False
+    if db is None:
+        try:
+            db = SessionLocal()
+            close_db = True
+        except Exception:
+            db = None
+
+    if db is not None:
+        try:
+            db_sess = UserSession(
+                token=token,
+                user_id=user.id,
+                username=user.username,
+                role=user.role,
+                full_name=user.full_name,
+                email=user.email,
+                allowed_domains=getattr(user, "allowed_domains", "") or "",
+                last_active=now
+            )
+            db.add(db_sess)
+            db.commit()
+        except Exception as ex:
+            print(f"Notice: Failed to insert DB session: {ex}")
+        finally:
+            if close_db:
+                db.close()
+
     return token
 
-def get_session_user(req: Request) -> Optional[dict]:
+def get_session_user(req: Request, db: Optional[Session] = None) -> Optional[dict]:
     auth_header = req.headers.get("Authorization") or ""
     token = ""
     if auth_header.startswith("Bearer "):
@@ -861,32 +911,70 @@ def get_session_user(req: Request) -> Optional[dict]:
     if not token:
         return None
 
-    # If token not present in memory cache, re-read from disk to support multi-process workers
-    if token not in ACTIVE_SESSIONS:
-        persisted = _load_persisted_sessions()
-        ACTIVE_SESSIONS.update(persisted)
-
-    if token not in ACTIVE_SESSIONS:
-        return None
-
-    sess = ACTIVE_SESSIONS[token]
-    last_active = sess["last_active"]
-    if isinstance(last_active, str):
-        try:
-            last_active = datetime.datetime.fromisoformat(last_active)
-            sess["last_active"] = last_active
-        except Exception:
-            last_active = datetime.datetime.utcnow()
-            sess["last_active"] = last_active
-
     now = datetime.datetime.utcnow()
-    if (now - last_active).total_seconds() > SESSION_EXPIRY_SECONDS:
-        del ACTIVE_SESSIONS[token]
-        _save_persisted_sessions()
-        return None
 
-    sess["last_active"] = now
-    return sess
+    # 1. Check in-memory session cache
+    if token in ACTIVE_SESSIONS:
+        sess = ACTIVE_SESSIONS[token]
+        last_active = sess.get("last_active")
+        if isinstance(last_active, str):
+            try:
+                last_active = datetime.datetime.fromisoformat(last_active)
+                sess["last_active"] = last_active
+            except Exception:
+                last_active = now
+                sess["last_active"] = last_active
+        if last_active and (now - last_active).total_seconds() <= SESSION_EXPIRY_SECONDS:
+            sess["last_active"] = now
+            return sess
+        else:
+            del ACTIVE_SESSIONS[token]
+            _save_persisted_sessions()
+
+    # 2. Check disk session persistence
+    persisted = _load_persisted_sessions()
+    if token in persisted:
+        sess = persisted[token]
+        ACTIVE_SESSIONS[token] = sess
+        return sess
+
+    # 3. Check database session persistence
+    close_db = False
+    if db is None:
+        try:
+            db = SessionLocal()
+            close_db = True
+        except Exception:
+            db = None
+
+    if db is not None:
+        try:
+            db_sess = db.query(UserSession).filter(UserSession.token == token).first()
+            if db_sess:
+                if (now - db_sess.last_active).total_seconds() <= SESSION_EXPIRY_SECONDS:
+                    db_sess.last_active = now
+                    db.commit()
+                    sess_data = {
+                        "user_id": db_sess.user_id,
+                        "username": db_sess.username,
+                        "role": db_sess.role,
+                        "full_name": db_sess.full_name,
+                        "email": db_sess.email,
+                        "allowed_domains": db_sess.allowed_domains or "",
+                        "last_active": now
+                    }
+                    ACTIVE_SESSIONS[token] = sess_data
+                    return sess_data
+                else:
+                    db.delete(db_sess)
+                    db.commit()
+        except Exception as ex:
+            print(f"Notice: Database session retrieval error: {ex}")
+        finally:
+            if close_db:
+                db.close()
+
+    return None
 
 def _send_smtp_worker(smtp_host: str, smtp_port: int, smtp_user: str, smtp_pass: str, recipients: list, smtp_encryption: str, trigger_type: str, subject: str, body_text: str):
     try:
@@ -1148,6 +1236,53 @@ def build_suspended_landing_html(
 </body>
 </html>"""
 
+def format_nginx_access_rules(rules_text: Optional[str]) -> str:
+    """
+    Parses user-provided IP access rules, cleans comments/semicolons,
+    and enforces strict Nginx sequential order:
+    All 'allow' directives evaluate first, followed by 'deny all;'.
+    """
+    if not rules_text or not rules_text.strip():
+        return ""
+    
+    lines = [l.strip() for l in rules_text.strip().splitlines() if l.strip()]
+    allows = []
+    denies = []
+    others = []
+
+    for line in lines:
+        l = line.strip()
+        comment = ""
+        if "#" in l:
+            parts = l.split("#", 1)
+            code_part = parts[0].strip()
+            comment = f" # {parts[1].strip()}"
+        else:
+            code_part = l
+        
+        if code_part and not code_part.endswith(";"):
+            code_part += ";"
+        
+        full_line = f"{code_part}{comment}".strip()
+        
+        if re.match(r'^allow\s+', code_part, re.IGNORECASE):
+            allows.append(full_line)
+        elif re.match(r'^deny\s+', code_part, re.IGNORECASE):
+            denies.append(full_line)
+        else:
+            others.append(full_line)
+
+    # In Nginx access module: 'allow' directives MUST evaluate before broad 'deny all;'
+    specific_denies = [d for d in denies if not re.match(r'^deny\s+all\s*;', d, re.IGNORECASE)]
+    broad_denies = [d for d in denies if re.match(r'^deny\s+all\s*;', d, re.IGNORECASE)]
+    
+    ordered = others + specific_denies + allows + broad_denies
+    if not ordered:
+        return ""
+    
+    indented = [f"    {l}" for l in ordered]
+    return "\n    # IP Access Control (Whitelisting & Restrictions)\n" + "\n".join(indented) + "\n"
+
 def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     """Generates production-grade Nginx server configuration blocks with custom suspension page."""
     domains = host.domain_names.replace(",", " ")
@@ -1155,6 +1290,8 @@ def generate_nginx_config(host: ProxyHost, db: Session) -> str:
     primary_domain = domains.split()[0] if domains else "localhost"
     all_domains = domains.split()
     reason = host.suspended_reason or "Administrative Policy Suspension"
+
+    access_block = format_nginx_access_rules(getattr(host, "access_rules", ""))
 
     susp_title = get_setting(db, "suspension_title", "Account Suspended — 503 Maintenance Mode")
     susp_msg = get_setting(db, "suspension_message", "This website service has been temporarily deactivated by Nova Cloud Edges Administration due to scheduled maintenance or account review.")
@@ -1427,6 +1564,7 @@ server {{
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 {exploit_block}
+{access_block}
 {stack_content}
 {custom_block}}}
 """
@@ -1446,6 +1584,7 @@ server {{
     listen [::]:80;
     server_name {domains};
 {exploit_block}
+{access_block}
 {stack_content}
 {custom_block}}}
 """
@@ -1736,8 +1875,11 @@ def get_system_status(db: Session = Depends(get_db)):
 def login(data: LoginRequest, req: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate user credentials and issue session token."""
     username = data.username.strip().lower()
-    if username in ["admin", "root"]:
+    if username in ["admin", "root", "superadmin"]:
         user = db.query(User).filter(User.username.in_(["superadmin", "admin"])).first()
+        if not user:
+            ensure_default_admin(db)
+            user = db.query(User).filter(User.username.in_(["superadmin", "admin"])).first()
     else:
         user = db.query(User).filter((User.username == username) | (User.email == username)).first()
     
@@ -1748,7 +1890,7 @@ def login(data: LoginRequest, req: Request, response: Response, db: Session = De
     if not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
-    token = create_session(user)
+    token = create_session(user, db)
     response.set_cookie(
         key="nova_session",
         value=token,
@@ -1783,7 +1925,7 @@ def login(data: LoginRequest, req: Request, response: Response, db: Session = De
 @app.get("/api/auth/me")
 def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
     """Validates session token and returns active user details."""
-    sess = get_session_user(req)
+    sess = get_session_user(req, db)
     if not sess:
         raise HTTPException(status_code=401, detail="Session expired or invalid. Please sign in.")
     
@@ -1799,7 +1941,7 @@ def get_current_user_profile(req: Request, db: Session = Depends(get_db)):
     return {"user": sess, "active": True}
 
 @app.post("/api/auth/logout")
-def logout(req: Request, response: Response):
+def logout(req: Request, response: Response, db: Session = Depends(get_db)):
     """Terminates active session token."""
     auth_header = req.headers.get("Authorization") or ""
     token = ""
@@ -1812,9 +1954,15 @@ def logout(req: Request, response: Response):
     elif req.cookies.get("nova_session"):
         token = req.cookies.get("nova_session").strip()
 
-    if token and token in ACTIVE_SESSIONS:
-        del ACTIVE_SESSIONS[token]
-        _save_persisted_sessions()
+    if token:
+        if token in ACTIVE_SESSIONS:
+            del ACTIVE_SESSIONS[token]
+            _save_persisted_sessions()
+        try:
+            db.query(UserSession).filter(UserSession.token == token).delete()
+            db.commit()
+        except Exception:
+            pass
     
     response.delete_cookie(key="nova_session", path="/")
     return {"message": "Signed out successfully."}
@@ -2207,7 +2355,7 @@ def delete_user(user_id: int, req: Request, db: Session = Depends(get_db)):
 # ---------------------------------------------------------
 @app.get("/api/hosts")
 def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
-    sess = get_session_user(req)
+    sess = get_session_user(req, db)
     query = db.query(ProxyHost)
 
     if search:
@@ -2241,6 +2389,16 @@ def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optiona
             if not any(hd in allowed_list for hd in host_domains):
                 continue
 
+        # Check live host SSL certificate for actual expiration date
+        primary_dom = host_domains[0] if host_domains else ""
+        if h.ssl_forced and primary_dom:
+            ssl_info = inspect_host_ssl_certificate(primary_dom)
+            if ssl_info and ssl_info.get("expires_at"):
+                if h.ssl_expires_at != ssl_info["expires_at"]:
+                    h.ssl_expires_at = ssl_info["expires_at"]
+                    h.ssl_status = ssl_info.get("status", "valid")
+                    h.ssl_provider = ssl_info.get("provider", h.ssl_provider)
+
         ssl_exp_str = str(h.ssl_expires_at) if h.ssl_expires_at else ""
 
         result.append({
@@ -2263,6 +2421,7 @@ def list_proxy_hosts(req: Request, search: Optional[str] = None, status: Optiona
             "is_suspended": bool(h.is_suspended),
             "suspended_reason": h.suspended_reason or "Administrative Policy Suspension",
             "custom_nginx_config": h.custom_nginx_config,
+            "access_rules": getattr(h, "access_rules", "") or "",
             "created_at": h.created_at.strftime("%Y-%m-%d %H:%M") if h.created_at else None,
             "can_edit_nginx_only": is_domain_mgr
         })
@@ -2279,7 +2438,11 @@ def create_proxy_host(data: ProxyHostCreate, req: Request, db: Session = Depends
         raise HTTPException(status_code=400, detail="Domain names cannot be blank")
 
     app_name_val = data.app_name.strip() if data.app_name and data.app_name.strip() else "Web Application"
-    expires = datetime.date.today() + datetime.timedelta(days=90) if data.ssl_forced else None
+    primary_dom = clean_domains.split(",")[0].strip()
+    live_ssl = inspect_host_ssl_certificate(primary_dom) if data.ssl_forced else None
+    expires = live_ssl.get("expires_at") if live_ssl else None
+    ssl_status = live_ssl.get("status", "active") if (live_ssl and expires) else ("active" if data.ssl_forced else "disabled")
+    ssl_provider = (live_ssl.get("provider") if live_ssl else None) or data.ssl_provider
 
     host = ProxyHost(
         domain_names=clean_domains,
@@ -2293,9 +2456,10 @@ def create_proxy_host(data: ProxyHostCreate, req: Request, db: Session = Depends
         forward_port=data.forward_port,
         websocket_support=data.websocket_support,
         block_exploits=data.block_exploits,
+        access_rules=data.access_rules,
         ssl_forced=data.ssl_forced,
-        ssl_provider=data.ssl_provider,
-        ssl_status="active" if data.ssl_forced else "disabled",
+        ssl_provider=ssl_provider,
+        ssl_status=ssl_status,
         ssl_expires_at=expires,
         is_suspended=False,
         suspended_reason="Administrative Policy Suspension",
@@ -2373,10 +2537,17 @@ def update_proxy_host(host_id: int, data: ProxyHostUpdate, req: Request, db: Ses
         host.websocket_support = data.websocket_support
     if data.block_exploits is not None:
         host.block_exploits = data.block_exploits
+    if data.access_rules is not None:
+        host.access_rules = data.access_rules
     if data.ssl_forced is not None:
         host.ssl_forced = data.ssl_forced
-        if data.ssl_forced and not host.ssl_expires_at:
-            host.ssl_expires_at = datetime.date.today() + datetime.timedelta(days=90)
+        primary_dom = host.domain_names.split(",")[0].strip() if host.domain_names else ""
+        if data.ssl_forced and primary_dom:
+            live_ssl = inspect_host_ssl_certificate(primary_dom)
+            if live_ssl and live_ssl.get("expires_at"):
+                host.ssl_expires_at = live_ssl["expires_at"]
+                host.ssl_status = live_ssl.get("status", "active")
+                host.ssl_provider = live_ssl.get("provider", host.ssl_provider)
     if data.ssl_provider is not None:
         host.ssl_provider = data.ssl_provider
     if data.is_suspended is not None:
@@ -2470,14 +2641,28 @@ def delete_proxy_host(host_id: int, req: Request, db: Session = Depends(get_db))
     target_file = find_host_nginx_config_file(domain_label)
     if target_file and os.path.isfile(target_file):
         try:
-            os.remove(target_file)
+            # 1. Safely remove symlink from sites-enabled
             sym = f"/etc/nginx/sites-enabled/{os.path.basename(target_file)}"
             if os.path.islink(sym):
                 os.remove(sym)
-            subprocess.run(["nginx", "-t"], capture_output=True, timeout=5)
-            subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, timeout=5)
-        except Exception:
-            pass
+
+            # 2. Never destroy original configs: safely archive to .bak_deleted
+            backup_deleted = target_file + ".bak_deleted"
+            try:
+                shutil.move(target_file, backup_deleted)
+            except Exception:
+                pass
+
+            # 3. Test Nginx syntax and reload
+            t_res = subprocess.run(["nginx", "-t"], capture_output=True, timeout=5)
+            if t_res.returncode == 0:
+                subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, timeout=5)
+            else:
+                # If removing caused syntax break elsewhere, restore the file
+                if os.path.isfile(backup_deleted):
+                    shutil.move(backup_deleted, target_file)
+        except Exception as e:
+            print(f"Notice: Host deletion file management: {e}")
 
     db.delete(host)
     db.commit()
@@ -2764,6 +2949,11 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
         target_host = existing
         action_msg = "updated"
     else:
+        live_ssl = inspect_host_ssl_certificate(primary_domain) if parsed["ssl_forced"] else None
+        ssl_exp = live_ssl.get("expires_at") if live_ssl else None
+        ssl_prov = (live_ssl.get("provider") if live_ssl else None) or "Let's Encrypt"
+        ssl_stat = live_ssl.get("status", "active") if (live_ssl and ssl_exp) else ("active" if parsed["ssl_forced"] else "disabled")
+
         new_host = ProxyHost(
             domain_names=parsed["domain_names"],
             host_type=parsed.get("host_type", "proxy"),
@@ -2776,9 +2966,9 @@ def import_single_host_conf(payload: NginxImportPayload, req: Request, db: Sessi
             websocket_support=parsed["websocket_support"],
             block_exploits=parsed["block_exploits"],
             ssl_forced=parsed["ssl_forced"],
-            ssl_provider="Let's Encrypt",
-            ssl_status="active" if parsed["ssl_forced"] else "disabled",
-            ssl_expires_at=datetime.date.today() + datetime.timedelta(days=90) if parsed["ssl_forced"] else None,
+            ssl_provider=ssl_prov,
+            ssl_status=ssl_stat,
+            ssl_expires_at=ssl_exp,
             is_suspended=parsed["is_suspended"],
             suspended_reason=parsed["suspended_reason"]
         )
@@ -2845,6 +3035,12 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
             existing.is_suspended = parsed["is_suspended"]
             target = existing
         else:
+            p_dom = parsed["domain_names"].split(",")[0].strip()
+            live_ssl = inspect_host_ssl_certificate(p_dom) if parsed["ssl_forced"] else None
+            ssl_exp = live_ssl.get("expires_at") if live_ssl else None
+            ssl_prov = (live_ssl.get("provider") if live_ssl else None) or "Let's Encrypt"
+            ssl_stat = live_ssl.get("status", "active") if (live_ssl and ssl_exp) else ("active" if parsed["ssl_forced"] else "disabled")
+
             new_h = ProxyHost(
                 domain_names=parsed["domain_names"],
                 host_type=parsed.get("host_type", "proxy"),
@@ -2857,9 +3053,9 @@ def import_multi_host_conf(payload: NginxImportPayload, req: Request, db: Sessio
                 websocket_support=parsed["websocket_support"],
                 block_exploits=parsed["block_exploits"],
                 ssl_forced=parsed["ssl_forced"],
-                ssl_provider="Let's Encrypt",
-                ssl_status="active" if parsed["ssl_forced"] else "disabled",
-                ssl_expires_at=datetime.date.today() + datetime.timedelta(days=90) if parsed["ssl_forced"] else None,
+                ssl_provider=ssl_prov,
+                ssl_status=ssl_stat,
+                ssl_expires_at=ssl_exp,
                 is_suspended=parsed["is_suspended"],
                 suspended_reason=parsed["suspended_reason"]
             )
@@ -3087,12 +3283,23 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
             existing.forward_host = item["forward_host"]
             existing.forward_port = item["forward_port"]
             existing.websocket_support = item["websocket_support"]
-            existing.block_exploits = item["block_exploits"]
             existing.ssl_forced = item["ssl_forced"]
             existing.ssl_provider = item["ssl_provider"]
             existing.custom_nginx_config = item["custom_nginx_config"]
+            p_dom = item["domain_names"].split(",")[0].strip().lower()
+            live_ssl = inspect_host_ssl_certificate(p_dom) if item["ssl_forced"] else None
+            if live_ssl and live_ssl.get("expires_at"):
+                existing.ssl_expires_at = live_ssl["expires_at"]
+                existing.ssl_status = live_ssl.get("status", "active")
+                existing.ssl_provider = live_ssl.get("provider", item["ssl_provider"])
             updated_count += 1
         else:
+            p_dom = item["domain_names"].split(",")[0].strip().lower()
+            live_ssl = inspect_host_ssl_certificate(p_dom) if item["ssl_forced"] else None
+            ssl_exp = live_ssl.get("expires_at") if live_ssl else None
+            ssl_prov = (live_ssl.get("provider") if live_ssl else None) or item["ssl_provider"]
+            ssl_stat = live_ssl.get("status", "active") if (live_ssl and ssl_exp) else ("active" if item["ssl_forced"] else "disabled")
+
             new_host = ProxyHost(
                 domain_names=item["domain_names"],
                 app_name="Host Nginx VirtualHost",
@@ -3106,9 +3313,9 @@ def sync_host_nginx_into_db(db: Session, force_replace_demo: bool = False) -> di
                 websocket_support=item["websocket_support"],
                 block_exploits=item["block_exploits"],
                 ssl_forced=item["ssl_forced"],
-                ssl_provider=item["ssl_provider"],
-                ssl_status="active" if item["ssl_forced"] else "disabled",
-                ssl_expires_at=datetime.date.today() + datetime.timedelta(days=90) if item["ssl_forced"] else None,
+                ssl_provider=ssl_prov,
+                ssl_status=ssl_stat,
+                ssl_expires_at=ssl_exp,
                 is_suspended=False,
                 custom_nginx_config=item["custom_nginx_config"]
             )
@@ -3824,23 +4031,53 @@ def report_domain_abuse(data: AbuseReportCreate, req: Request, db: Session = Dep
 # ---------------------------------------------------------
 WHOIS_EXPIRY_CACHE: Dict[str, dict] = {}
 
-def get_real_nameservers(domain: str) -> List[str]:
-    """Queries live DNS for authoritative nameservers."""
+def get_apex_domain(domain: str) -> str:
+    """Extracts the apex registration domain (e.g. sub.ncloud.co.ug -> ncloud.co.ug)."""
     clean = domain.strip().lower()
+    clean = re.sub(r'^https?://', '', clean).split('/')[0].split(':')[0]
+    parts = clean.split('.')
+    if len(parts) <= 2:
+        return clean
+    two_level_tlds = {
+        'co.ug', 'ac.ug', 'go.ug', 'org.ug', 'ne.ug', 'sc.ug', 'net.ug', 'com.ug',
+        'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk',
+        'co.za', 'org.za', 'net.za', 'ac.za',
+        'co.ke', 'or.ke', 'ne.ke', 'go.ke', 'ac.ke', 'sc.ke',
+        'co.tz', 'or.tz', 'go.tz', 'ac.tz',
+        'co.rw', 'org.rw', 'net.rw', 'ac.rw',
+        'com.au', 'net.au', 'org.au', 'edu.au',
+        'co.nz', 'net.nz', 'org.nz',
+        'com.br', 'org.br', 'net.br'
+    }
+    last_two = '.'.join(parts[-2:])
+    if last_two in two_level_tlds and len(parts) >= 3:
+        return '.'.join(parts[-3:])
+    return '.'.join(parts[-2:])
+
+def get_real_nameservers(domain: str) -> List[str]:
+    """Queries live DNS for authoritative nameservers with public DNS resolvers."""
+    apex = get_apex_domain(domain)
     ns_list = []
-    try:
-        p = subprocess.run(["dig", "+short", "NS", clean], capture_output=True, text=True, timeout=3)
-        if p.returncode == 0 and p.stdout:
-            for line in p.stdout.splitlines():
-                val = line.strip().rstrip(".").lower()
-                if val and val not in ns_list:
-                    ns_list.append(val)
-    except Exception:
-        pass
+    for resolver in ["@1.1.1.1", "@8.8.8.8", None]:
+        if ns_list:
+            break
+        try:
+            cmd = ["dig"]
+            if resolver:
+                cmd.append(resolver)
+            cmd.extend(["+short", "NS", apex])
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            if p.returncode == 0 and p.stdout:
+                for line in p.stdout.splitlines():
+                    val = line.strip().rstrip(".").lower()
+                    if val and val not in ns_list:
+                        ns_list.append(val)
+        except Exception:
+            pass
 
     if not ns_list:
         try:
-            p = subprocess.run(["host", "-t", "NS", clean], capture_output=True, text=True, timeout=3)
+            p = subprocess.run(["host", "-t", "NS", apex], capture_output=True, text=True, timeout=3)
             if p.returncode == 0 and p.stdout:
                 for line in p.stdout.splitlines():
                     m = re.search(r'name server\s+([^\s]+)', line, re.IGNORECASE)
@@ -3901,6 +4138,8 @@ def query_full_whois(domain: str) -> dict:
     if not clean:
         return {}
 
+    apex = get_apex_domain(clean)
+
     now = datetime.datetime.utcnow()
     cached = WHOIS_EXPIRY_CACHE.get(clean)
     if cached and (now - cached.get("_cached_at", now)).total_seconds() < 86400:
@@ -3916,39 +4155,45 @@ def query_full_whois(domain: str) -> dict:
 
     raw_text = ""
     target_server = None
-    if clean.endswith(".ug"):
+    if apex.endswith(".ug"):
         target_server = "whois.co.ug"
-    elif clean.endswith(".com") or clean.endswith(".net"):
+    elif apex.endswith(".com") or apex.endswith(".net"):
         target_server = "whois.verisign-grs.com"
-    elif clean.endswith(".org"):
+    elif apex.endswith(".org"):
         target_server = "whois.publicinterestregistry.org"
-    elif clean.endswith(".io"):
+    elif apex.endswith(".io"):
         target_server = "whois.nic.io"
 
     if target_server:
-        raw_text = query_whois_socket(target_server, clean)
+        raw_text = query_whois_socket(target_server, apex)
 
     if not raw_text or len(raw_text.strip()) < 30:
         try:
-            p = subprocess.run(["whois", clean], capture_output=True, text=True, timeout=6)
+            p = subprocess.run(["whois", apex], capture_output=True, text=True, timeout=6)
             raw_text = p.stdout or p.stderr or ""
         except Exception:
             pass
 
     if not raw_text or len(raw_text.strip()) < 30:
-        tld = clean.split(".")[-1]
+        tld = apex.split(".")[-1]
         iana_res = query_whois_socket("whois.iana.org", tld)
         ref_m = re.search(r'(?:refer|whois):\s*([^\s]+)', iana_res, re.IGNORECASE)
         if ref_m:
             ref_server = ref_m.group(1).strip()
-            raw_text = query_whois_socket(ref_server, clean)
+            raw_text = query_whois_socket(ref_server, apex)
         else:
             raw_text = iana_res
 
     registrar = "Unknown / Registry"
     reg_m = re.search(r'(?:Registrar|registrar|Sponsoring Registrar|Registrar Name):\s*(.+)', raw_text, re.IGNORECASE)
-    if reg_m:
+    if reg_m and reg_m.group(1).strip():
         registrar = reg_m.group(1).strip()
+    else:
+        org_m = re.search(r'(?:Registrant Organization|Admin Organization):\s*(.+)', raw_text, re.IGNORECASE)
+        if org_m and org_m.group(1).strip():
+            registrar = f"{org_m.group(1).strip()} (Registry Direct)"
+        elif target_server == "whois.co.ug" or apex.endswith(".ug"):
+            registrar = "Uganda ccTLD Registry (whois.co.ug)"
 
     created_on = "Unknown"
     cr_m = re.search(r'(?:Creation Date|Created|Registration Date|Registered On|created|registered):\s*(.+)', raw_text, re.IGNORECASE)
@@ -3978,12 +4223,13 @@ def query_full_whois(domain: str) -> dict:
             status_list.append(st)
 
     abuse_contact = "Unknown"
-    ab_m = re.search(r'(?:Registrar Abuse Contact Email|abuse-mailbox|e-mail):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE)
+    ab_m = re.search(r'(?:Registrar Abuse Contact Email|Registrant Email|Admin Email|abuse-mailbox|e-mail):\s*([^\s\r\n]+)', raw_text, re.IGNORECASE)
     if ab_m:
         abuse_contact = ab_m.group(1).strip()
 
     res = {
         "domain": clean,
+        "apex_domain": apex,
         "ip_resolution": resolved_ip,
         "registrar": registrar,
         "registered_on": created_on,
@@ -4006,16 +4252,17 @@ def inspect_host_ssl_certificate(domain: str) -> Optional[dict]:
     if not clean:
         return None
 
+    apex = get_apex_domain(clean)
     candidate_paths = [
         f"/etc/letsencrypt/live/{clean}/fullchain.pem",
         f"/etc/letsencrypt/live/{clean}/cert.pem",
         f"/etc/ssl/certs/{clean}.crt",
-        f"/etc/nginx/ssl/{clean}.crt"
+        f"/etc/nginx/ssl/{clean}.crt",
+        f"/etc/letsencrypt/live/{apex}/fullchain.pem",
+        f"/etc/letsencrypt/live/{apex}/cert.pem",
+        f"/etc/ssl/certs/{apex}.crt",
+        f"/etc/nginx/ssl/{apex}.crt"
     ]
-    parts = clean.split(".")
-    if len(parts) > 2:
-        apex = ".".join(parts[-2:])
-        candidate_paths.append(f"/etc/letsencrypt/live/{apex}/fullchain.pem")
 
     found_cert_file = None
     for p in candidate_paths:
@@ -4364,16 +4611,19 @@ def get_certificates(db: Session = Depends(get_db)):
 
 @app.post("/api/certificates/renew")
 def renew_ssl_certificate(domain: str, req: Request, db: Session = Depends(get_db)):
-    cert = db.query(Certificate).filter(Certificate.domain == domain).first()
-    new_expires = datetime.date.today() + datetime.timedelta(days=90)
+    live_ssl = inspect_host_ssl_certificate(domain)
+    new_expires = (live_ssl.get("expires_at") if live_ssl else None) or (datetime.date.today() + datetime.timedelta(days=90))
+    provider_name = (live_ssl.get("provider") if live_ssl else None) or "Let's Encrypt Certbot"
     
+    cert = db.query(Certificate).filter(Certificate.domain == domain).first()
     if cert:
         cert.expires_at = new_expires
+        cert.provider = provider_name
         cert.status = "valid"
     else:
         cert = Certificate(
             domain=domain,
-            provider="Let's Encrypt Certbot",
+            provider=provider_name,
             status="valid",
             issued_at=datetime.date.today(),
             expires_at=new_expires,
@@ -4771,7 +5021,10 @@ def get_logs_analytics(db: Session = Depends(get_db)):
 # Web UI Dashboard Route
 # ---------------------------------------------------------
 @app.get("/login", response_class=HTMLResponse)
-def login_page():
+def login_page(req: Request, db: Session = Depends(get_db)):
+    sess = get_session_user(req, db)
+    if sess:
+        return RedirectResponse(url="/", status_code=302)
     login_file = os.path.join(static_dir, "login.html")
     if os.path.exists(login_file):
         with open(login_file, "r", encoding="utf-8") as f:
@@ -4779,7 +5032,12 @@ def login_page():
     return "<h1>Nova Cloud Edges — Login</h1><p><a href='/'>Go to Dashboard</a></p>"
 
 @app.get("/", response_class=HTMLResponse)
-def index_page():
+def index_page(req: Request, db: Session = Depends(get_db)):
+    sess = get_session_user(req, db)
+    if not sess:
+        auth_cookie = req.cookies.get("nova_session") or req.cookies.get("nova_token")
+        if not auth_cookie and "token" not in req.query_params:
+            return RedirectResponse(url="/login?require_auth=1", status_code=302)
     index_file = os.path.join(static_dir, "index.html")
     if os.path.exists(index_file):
         with open(index_file, "r", encoding="utf-8") as f:

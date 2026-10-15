@@ -41,16 +41,21 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       let res = await checkAuth();
       if (!res.ok && res.status === 401) {
-        // Quick 1-time retry to absorb transient race conditions during redirects
-        await new Promise(r => setTimeout(r, 300));
+        // Quick retry to absorb transient worker reload or race condition
+        await new Promise(r => setTimeout(r, 350));
         res = await checkAuth();
       }
 
-      if (!res.ok) {
+      if (res.status === 401) {
         localStorage.removeItem('nova_session_token');
         localStorage.removeItem('nova_token');
         localStorage.removeItem('nova_current_user');
         window.location.replace('/login?session_expired=1');
+        return;
+      }
+
+      if (!res.ok) {
+        console.warn('Session check warning: server returned HTTP status', res.status);
         return;
       }
       const data = await res.json();
@@ -716,9 +721,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let sslBadgeClass = 'none';
       let sslBadgeText = 'No SSL';
+      let sslExpiryInfo = '';
       if (h.ssl_forced) {
-        sslBadgeClass = h.ssl_status === 'expiring_soon' ? 'expiring' : 'valid';
-        sslBadgeText = h.ssl_status === 'expiring_soon' ? 'Expiring Soon' : "Let's Encrypt";
+        if (h.ssl_expires_at) {
+          const expDate = new Date(h.ssl_expires_at);
+          const now = new Date();
+          const diffDays = Math.ceil((expDate - now) / (1000 * 60 * 60 * 24));
+          const prov = h.ssl_provider || "Let's Encrypt";
+          if (diffDays <= 0) {
+            sslBadgeClass = 'expired';
+            sslBadgeText = 'SSL Expired';
+            sslExpiryInfo = `<div style="font-size: 0.68rem; color: #ef4444; margin-top: 0.2rem;">Expired: ${escapeHtml(h.ssl_expires_at)}</div>`;
+          } else if (diffDays <= 15) {
+            sslBadgeClass = 'expiring';
+            sslBadgeText = `${escapeHtml(prov)} (${diffDays}d)`;
+            sslExpiryInfo = `<div style="font-size: 0.68rem; color: #f59e0b; margin-top: 0.2rem;">Exp: ${escapeHtml(h.ssl_expires_at)}</div>`;
+          } else {
+            sslBadgeClass = 'valid';
+            sslBadgeText = `${escapeHtml(prov)}`;
+            sslExpiryInfo = `<div style="font-size: 0.68rem; color: var(--text-muted); margin-top: 0.2rem;">Exp: ${escapeHtml(h.ssl_expires_at)} (${diffDays}d)</div>`;
+          }
+        } else {
+          sslBadgeClass = 'valid';
+          sslBadgeText = h.ssl_provider || "Let's Encrypt";
+        }
       }
 
       const isDomainMgr = (activeRole === 'domain_manager' || h.can_edit_nginx_only);
@@ -787,10 +813,13 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </td>
           <td>
-            <span class="ssl-badge ${sslBadgeClass}">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              ${sslBadgeText}
-            </span>
+            <div style="display: flex; flex-direction: column; align-items: flex-start;">
+              <span class="ssl-badge ${sslBadgeClass}">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                ${sslBadgeText}
+              </span>
+              ${sslExpiryInfo}
+            </div>
           </td>
           <td>
             <div style="display: flex; align-items: center; gap: 0.5rem;">
@@ -1220,6 +1249,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('input-static-root-path').value = '';
     document.getElementById('select-php-version').value = 'auto';
     document.getElementById('input-php-socket').value = '';
+    const accessRulesEl = document.getElementById('input-access-rules');
+    if (accessRulesEl) accessRulesEl.value = '';
 
     fetchPhpRuntimes();
     hostModal.classList.add('open');
@@ -1232,28 +1263,72 @@ document.addEventListener('DOMContentLoaded', () => {
     hostModal.classList.remove('open');
   });
 
+  // Helper: Append or insert allow rule ensuring deny all remains last
+  function appendAccessRule(ruleLine) {
+    const el = document.getElementById('input-access-rules');
+    if (!el) return;
+    let lines = (el.value || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const bareRule = ruleLine.split('#')[0].trim().toLowerCase();
+    const alreadyExists = lines.some(l => l.split('#')[0].trim().toLowerCase() === bareRule);
+    if (!alreadyExists) {
+      const denyIdx = lines.findIndex(l => l.toLowerCase().startsWith('deny all'));
+      if (denyIdx !== -1) {
+        lines.splice(denyIdx, 0, ruleLine);
+      } else {
+        lines.push(ruleLine);
+      }
+      el.value = lines.join('\n');
+      showToast(`Added: ${ruleLine}`, 'info');
+    } else {
+      showToast('Rule already present in access list', 'warning');
+    }
+  }
+
+  // Quick Rule Chips
+  const chipAddSun = document.getElementById('chip-add-sun');
+  const chipAddRenu = document.getElementById('chip-add-renu');
+  const chipAddVpn = document.getElementById('chip-add-vpn');
+  const chipAddDenyAll = document.getElementById('chip-add-deny-all');
+
+  if (chipAddSun) {
+    chipAddSun.addEventListener('click', () => appendAccessRule('allow 137.63.181.0/24; # SUN Network'));
+  }
+  if (chipAddRenu) {
+    chipAddRenu.addEventListener('click', () => appendAccessRule('allow 102.34.0.0/16; # RENU Link'));
+  }
+  if (chipAddVpn) {
+    chipAddVpn.addEventListener('click', () => appendAccessRule('allow 107.155.122.15; # VPN'));
+  }
+  if (chipAddDenyAll) {
+    chipAddDenyAll.addEventListener('click', () => {
+      const el = document.getElementById('input-access-rules');
+      if (!el) return;
+      let lines = (el.value || '').split('\n').map(l => l.trim()).filter(Boolean);
+      if (!lines.some(l => l.toLowerCase().startsWith('deny all'))) {
+        lines.push('deny all;');
+        el.value = lines.join('\n');
+        showToast('Added: deny all;', 'info');
+      } else {
+        showToast('deny all; already present at end', 'warning');
+      }
+    });
+  }
+
   const btnPresetWhitelist = document.getElementById('btn-preset-whitelist');
   const btnClearWhitelist = document.getElementById('btn-clear-whitelist');
   if (btnPresetWhitelist) {
     btnPresetWhitelist.addEventListener('click', () => {
-      const customEl = document.getElementById('input-custom-nginx');
-      const presetDirectives = `# Restrict Access to Authorized IP Networks\nallow 137.63.181.0/24; # SUN Network\nallow 102.34.0.0/16;   # RENU Link\nallow 107.155.122.15;  # VPN\ndeny all;\n`;
-      const cur = (customEl.value || '').trim();
-      if (!cur) {
-        customEl.value = presetDirectives;
-      } else if (!cur.includes('137.63.181.0/24')) {
-        customEl.value = presetDirectives + '\n' + cur;
-      }
-      showToast('Inserted SUN / RENU / VPN Whitelist Directives', 'success');
+      const accessEl = document.getElementById('input-access-rules');
+      const presetDirectives = `allow 137.63.181.0/24; # SUN Network\nallow 102.34.0.0/16;   # RENU Link\nallow 107.155.122.15;  # VPN\ndeny all;`;
+      if (accessEl) accessEl.value = presetDirectives;
+      showToast('Applied SUN / RENU / VPN Whitelist Preset', 'success');
     });
   }
 
   if (btnClearWhitelist) {
     btnClearWhitelist.addEventListener('click', () => {
-      const customEl = document.getElementById('input-custom-nginx');
-      let lines = (customEl.value || '').split('\n');
-      lines = lines.filter(l => !l.includes('137.63.181.0') && !l.includes('102.34.0.0') && !l.includes('107.155.122.15') && !l.trim().startsWith('deny all') && !l.includes('Authorized IP Access'));
-      customEl.value = lines.join('\n').trim();
+      const accessEl = document.getElementById('input-access-rules');
+      if (accessEl) accessEl.value = '';
       showToast('Access restriction reset to Public (Allow All)', 'info');
     });
   }
@@ -1303,6 +1378,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('input-static-root-path').value = (stackType === 'static' ? h.root_path : '') || '';
     document.getElementById('select-php-version').value = h.php_version || 'auto';
     document.getElementById('input-php-socket').value = h.php_fpm_socket || '';
+
+    const accessRulesEl = document.getElementById('input-access-rules');
+    if (accessRulesEl) {
+      accessRulesEl.value = h.access_rules || '';
+      accessRulesEl.disabled = false;
+    }
 
     const customNginxEl = document.getElementById('input-custom-nginx');
     customNginxEl.value = h.custom_nginx_config || '';
@@ -1369,6 +1450,7 @@ document.addEventListener('DOMContentLoaded', () => {
       block_exploits: document.getElementById('input-block-exploits').checked,
       ssl_forced: document.getElementById('input-ssl-forced').checked,
       suspended_reason: document.getElementById('input-suspended-reason').value.trim(),
+      access_rules: document.getElementById('input-access-rules') ? document.getElementById('input-access-rules').value.trim() : null,
       custom_nginx_config: document.getElementById('input-custom-nginx').value.trim()
     };
 
