@@ -668,27 +668,25 @@ def ensure_default_admin(db: Optional[Session] = None):
         except Exception:
             return
     try:
-        admin_user = db.query(User).filter(User.username.in_(["admin", "superadmin"])).first()
+        admin_user = db.query(User).filter(User.username == "admin").first()
         if not admin_user:
-            count = db.query(User).count()
-            if count == 0:
-                default_user = os.getenv("ADMIN_USER", "admin")
-                default_pass = os.getenv("ADMIN_PASS", "admin")
-                new_admin = User(
-                    username=default_user,
-                    full_name="System Administrator",
-                    email="admin@novacloudedges.com",
-                    role="super_admin",
-                    is_active=True,
-                    password_hash=hash_password(default_pass)
-                )
-                db.add(new_admin)
-                db.commit()
-                print("==================================================================")
-                print(f"[Init] Auto-created default administrator account:")
-                print(f"       Username: {default_user}")
-                print(f"       Password: {default_pass}")
-                print("==================================================================")
+            default_user = os.getenv("ADMIN_USER", "admin")
+            default_pass = os.getenv("ADMIN_PASS", "admin")
+            new_admin = User(
+                username=default_user,
+                full_name="System Administrator",
+                email="admin@novacloudedges.com",
+                role="super_admin",
+                is_active=True,
+                password_hash=hash_password(default_pass)
+            )
+            db.add(new_admin)
+            db.commit()
+            print("==================================================================")
+            print(f"[Init] Auto-created default administrator account:")
+            print(f"       Username: {default_user}")
+            print(f"       Password: {default_pass}")
+            print("==================================================================")
     except Exception as e:
         print(f"Notice: Default admin initialization: {e}")
     finally:
@@ -1452,34 +1450,50 @@ server {{
     php_sock = (getattr(host, "php_fpm_socket", None) or "").strip()
 
     if h_type == "lemp":
-        root_dir = root_val if root_val else f"/var/www/{primary_domain}/public"
+        root_dir = root_val if root_val else f"/var/www/{primary_domain}"
         fpm_destination = resolve_php_fpm_socket(php_ver, php_sock)
         stack_title = f"LEMP Stack (PHP-FPM) | Root: {root_dir} | FastCGI: {fpm_destination}"
+
+        # DigitalOcean Ubuntu standard: Check for snippets/fastcgi-php.conf or fallback to portable fastcgi directives
+        if os.path.exists("/etc/nginx/snippets/fastcgi-php.conf"):
+            fastcgi_snippet = "        include snippets/fastcgi-php.conf;"
+        else:
+            fastcgi_snippet = """        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;"""
+
         stack_content = f"""
-    # LEMP Stack - Document Root & Directory Indexing
+    # LEMP Stack - Document Root & Directory Indexing (Ubuntu & DigitalOcean Standard)
     root {root_dir};
-    index index.php index.html index.htm;
+    index index.html index.htm index.php;
     client_max_body_size 64M;
 
-    # Primary Routing Engine (Supports WordPress, Laravel, Symfony, Custom PHP)
+    # Primary Routing Engine (Supports Static Files, WordPress, Laravel, Custom PHP)
     location / {{
         try_files $uri $uri/ /index.php?$query_string;
     }}
 
     # PHP-FPM FastCGI Execution Handler
     location ~ \\.php$ {{
-        try_files $uri =404;
-        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+{fastcgi_snippet}
         fastcgi_pass {fpm_destination};
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_param HTTP_PROXY ""; # HTTPoxy vulnerability defense
-        include fastcgi_params;
         fastcgi_buffer_size 32k;
         fastcgi_buffers 16 16k;
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout 300s;
         fastcgi_read_timeout 300s;
+    }}
+
+    # DigitalOcean LEMP Step 4 Standard: Deny access to .htaccess and sensitive hidden files
+    location ~ /\\.ht {{
+        deny all;
+    }}
+    location ~ /\\.(git|env|svn) {{
+        deny all;
+        return 404;
     }}
 
     # Static Media & Browser Cache Optimization
@@ -1875,7 +1889,12 @@ def get_system_status(db: Session = Depends(get_db)):
 def login(data: LoginRequest, req: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate user credentials and issue session token."""
     username = data.username.strip().lower()
-    if username in ["admin", "root", "superadmin"]:
+    if username == "admin":
+        user = db.query(User).filter(User.username == "admin").first()
+        if not user:
+            ensure_default_admin(db)
+            user = db.query(User).filter(User.username == "admin").first()
+    elif username in ["root", "superadmin"]:
         user = db.query(User).filter(User.username.in_(["superadmin", "admin"])).first()
         if not user:
             ensure_default_admin(db)

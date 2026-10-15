@@ -1067,6 +1067,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Framework Presets
+  const btnPresetDoLemp = document.getElementById('btn-preset-do-lemp');
   const btnPresetWordpress = document.getElementById('btn-preset-wordpress');
   const btnPresetLaravel = document.getElementById('btn-preset-laravel');
   const btnPresetGenericPhp = document.getElementById('btn-preset-generic-php');
@@ -1078,11 +1079,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return first || 'example.com';
   }
 
+  if (btnPresetDoLemp) {
+    btnPresetDoLemp.addEventListener('click', () => {
+      const d = getFirstHostDomain();
+      document.getElementById('input-root-path').value = `/var/www/${d}`;
+      showToast('Configured DigitalOcean LEMP standard document root (/var/www/' + d + ')', 'info');
+    });
+  }
   if (btnPresetWordpress) {
     btnPresetWordpress.addEventListener('click', () => {
       const d = getFirstHostDomain();
-      document.getElementById('input-root-path').value = `/var/www/${d}/public`;
-      showToast('Configured WordPress document root (/public)', 'info');
+      document.getElementById('input-root-path').value = `/var/www/${d}`;
+      showToast('Configured WordPress document root (/var/www/' + d + ')', 'info');
     });
   }
   if (btnPresetLaravel) {
@@ -1230,7 +1238,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason',
       'radio-stack-proxy', 'radio-stack-lemp', 'radio-stack-static',
       'input-root-path', 'select-php-version', 'input-php-socket',
-      'input-static-root-path', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
+      'input-static-root-path', 'btn-preset-do-lemp', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
     ];
     fieldsToToggle.forEach(fId => {
       const el = document.getElementById(fId);
@@ -1354,7 +1362,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'input-block-exploits', 'input-ssl-forced', 'input-suspended-reason',
       'radio-stack-proxy', 'radio-stack-lemp', 'radio-stack-static',
       'input-root-path', 'select-php-version', 'input-php-socket',
-      'input-static-root-path', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
+      'input-static-root-path', 'btn-preset-do-lemp', 'btn-preset-wordpress', 'btn-preset-laravel', 'btn-preset-generic-php'
     ];
     fieldsToToggle.forEach(fId => {
       const el = document.getElementById(fId);

@@ -10,9 +10,11 @@ Contact us: Email: `support@sun.ac.ug` | Tel: `+256790 00031`
 > - **Username:** `admin`
 > - **Password:** `admin`
 > - **Role:** `super_admin` (Full Administrative Access)
-> - **Access Portal:** `http://<server-ip>:8000/login`
+> - **Access Portals:**
+>   - `http://localhost:8888/login` (Standard MAMP / Reverse Proxy Port)
+>   - `http://localhost:8000/login` (Direct FastAPI Core Port)
 >
-> When the system boots for the first time, this account is automatically initialized. You can also click the **"Quick Fill (admin / admin)"** badge on the web login screen for instant access.
+> When the system boots for the first time, the `admin` account is automatically initialized. You can also click the **"Quick Fill (admin / admin)"** badge on the web login screen for instant access.
 
 ---
 
@@ -23,9 +25,9 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
 ```
        +-------------------------------------------------------------+
        |               Nova Proxy Admin Console (Web UI)             |
-       |  Vanilla HTML5 / CSS3 Dark Theme / SVG Icons / Clean JS    |
+       |  Vanilla HTML5 / CSS3 Dark Theme / SVG Icons / Clean JS     |
        +------------------------------+------------------------------+
-                                      | HTTP / REST API (Port 8000)
+                                      | HTTP / REST API (Port 8000 / 8888)
                                       v
        +-------------------------------------------------------------+
        |                    FastAPI Backend (app.py)                 |
@@ -44,9 +46,14 @@ Nova Proxy Admin provides a secure web console and RESTful API for administering
 
 ## Key Features & Capabilities
 
-### 1. Reverse Proxy, CloudPanel & LEMP Stack Flexibility
+### 1. Reverse Proxy, CloudPanel & LEMP Stack Standards (DigitalOcean Reference)
 - **Hybrid Architecture Engine**: Seamlessly deploy and manage both **Reverse Proxy / Upstream Clusters** (Node.js, Python, Docker, Go, CloudPanel) and native **LEMP Stack hosts** (PHP-FPM, WordPress, Laravel, Symfony, custom PHP), alongside static SPAs.
-- **PHP-FPM Auto-Discovery**: Automatically probes system PHP runtimes (`/run/php/php*-fpm.sock`, PHP 8.4, 8.3, 8.2, 8.1, 8.0, 7.4) and provides 1-click presets for WordPress, Laravel (`/public`), and Custom PHP.
+- **DigitalOcean LEMP Standards ([Reference Guide](https://www.digitalocean.com/community/tutorials/how-to-install-linux-nginx-mysql-php-lemp-stack-on-ubuntu))**:
+  - **Document Roots**: Standardized at `/var/www/<domain>` (or `/var/www/<domain>/public` for Laravel).
+  - **Index Precedence**: Generates `index index.html index.htm index.php;`, allowing maintenance splash pages while prioritizing FastCGI PHP execution.
+  - **FastCGI Handler**: Automatically includes `/etc/nginx/snippets/fastcgi-php.conf` on Debian/Ubuntu systems with transparent fallback to explicit `fastcgi_split_path_info`, `try_files $uri =404;`, and `fastcgi_params` on non-Debian platforms.
+  - **Hidden File Protection (Step 4)**: Strictly enforces `location ~ /\.ht { deny all; }` and `location ~ /\.(git|env|svn) { deny all; return 404; }` across all LEMP configurations to block sensitive files.
+- **PHP-FPM Auto-Discovery**: Automatically probes system PHP runtimes (`/run/php/php*-fpm.sock`, PHP 8.4, 8.3, 8.2, 8.1, 8.0, 7.4) and provides 1-click presets for **DigitalOcean LEMP**, **WordPress**, **Laravel** (`/public`), and **Custom PHP**.
 - **Production FastCGI Standards**: Generates pristine Nginx PHP directives including `try_files $uri $uri/ /index.php?$query_string;`, `fastcgi_intercept_errors on;`, static asset cache expirations (30d), and 64M client body uploads.
 - **Apex Domains & Subdomains**: Full routing support for primary apex domains (`example.com`, `sun.ac.ug`) and subdomains (`portal.example.com`, `api.sun.ac.ug`).
 - **Application Labeling**: Assign friendly service labels to each virtual host (e.g., *Core ERP*, *Student Portal*, *WordPress Blog*).
