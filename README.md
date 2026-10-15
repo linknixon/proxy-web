@@ -6,15 +6,11 @@ Maintained by **[Nova Cloud Edges](https://ncloud.co.ug)**
 Contact us: Email: `support@sun.ac.ug` | Tel: `+256790 00031`
 
 > [!IMPORTANT]
-> **Default Administrator Credentials (Auto-Created on Initial Boot):**
-> - **Username:** `admin`
-> - **Password:** `admin`
-> - **Role:** `super_admin` (Full Administrative Access)
-> - **Access Portals:**
->   - `http://localhost:8888/login` (Standard MAMP / Reverse Proxy Port)
->   - `http://localhost:8000/login` (Direct FastAPI Core Port)
+> **Web Console Access Portals:**
+> - **Standard MAMP / Reverse Proxy Port:** `http://localhost:8888/login`
+> - **Direct FastAPI Core Port:** `http://localhost:8000/login`
 >
-> When the system boots for the first time, the `admin` account is automatically initialized. You can also click the **"Quick Fill (admin / admin)"** badge on the web login screen for instant access.
+> Access is secured via Role-Based Access Control (RBAC) with token sessions and automatic inactivity timeouts.
 
 ---
 
@@ -416,7 +412,7 @@ When the application boots for the first time on a new installation or database,
 > export ADMIN_USER="my_custom_admin"
 > export ADMIN_PASS="MySuperSecretPassword123!"
 > ```
-> On the web login screen, a **Quick Fill** badge is provided for 1-click credential population. Remember to change the password immediately after initial setup using the profile popup in the top navigation bar.
+> Authenticate using your provisioned Super Admin credentials. Remember to rotate your password regularly using the profile settings in the top navigation bar.
 
 ---
 

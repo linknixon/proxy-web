@@ -1889,16 +1889,13 @@ def get_system_status(db: Session = Depends(get_db)):
 def login(data: LoginRequest, req: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate user credentials and issue session token."""
     username = data.username.strip().lower()
-    if username == "admin":
-        user = db.query(User).filter(User.username == "admin").first()
-        if not user:
-            ensure_default_admin(db)
-            user = db.query(User).filter(User.username == "admin").first()
-    elif username in ["root", "superadmin"]:
-        user = db.query(User).filter(User.username.in_(["superadmin", "admin"])).first()
-        if not user:
-            ensure_default_admin(db)
+    if username in ["admin", "superadmin", "root"]:
+        user = db.query(User).filter(User.username == username).first()
+        if not user and username == "root":
             user = db.query(User).filter(User.username.in_(["superadmin", "admin"])).first()
+        if not user:
+            ensure_default_admin(db)
+            user = db.query(User).filter(User.username == username).first()
     else:
         user = db.query(User).filter((User.username == username) | (User.email == username)).first()
     
